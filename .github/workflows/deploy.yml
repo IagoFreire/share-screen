@@ -1,0 +1,79 @@
+name: Deploy
+
+# Builds on GitHub's runners and ships only the compiled output to Lightsail.
+# The 1GB instance can't comfortably run `vite build` + `tsc` -- they'd page into swap
+# and take minutes -- so the instance never builds anything. It only installs runtime
+# dependencies (express/ws/dotenv, all small) and runs node.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # lets you re-deploy from the Actions tab without a new commit
+
+# Never let two deploys interleave rsync + restart on the same box.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build # shared -> client (static bundle) -> server
+
+      # Exactly what production needs, and nothing else. Source, node_modules and the
+      # toolchain all stay behind; package.json + package-lock.json come along so the
+      # instance can resolve runtime dependencies with `npm ci --omit=dev`.
+      - name: Stage release
+        run: |
+          mkdir -p staging/server staging/shared staging/client
+          cp package.json package-lock.json staging/
+          cp server/package.json staging/server/
+          cp shared/package.json staging/shared/
+          cp client/package.json staging/client/
+          cp -r server/dist staging/server/dist
+          cp -r shared/dist staging/shared/dist
+          cp -r client/dist staging/client/dist
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Pin the host key instead of StrictHostKeyChecking=no, so a hijacked DNS
+          # record or a swapped instance fails the deploy rather than silently
+          # shipping the release (and the SSH key) to whatever answers.
+          echo "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Upload release
+        run: |
+          rsync -az --delete \
+            --exclude='.env' \
+            --exclude='node_modules' \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            staging/ "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/opt/screenshare-bot/"
+
+      - name: Install runtime dependencies and restart
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" bash -eu <<'REMOTE'
+            cd /opt/screenshare-bot
+            npm ci --omit=dev
+            sudo systemctl restart screenshare-bot
+            # Give it a moment to fall over on a bad release rather than reporting
+            # success just because systemd accepted the restart command.
+            sleep 3
+            systemctl is-active --quiet screenshare-bot
+            echo "Deploy OK: $(systemctl show -p ActiveState --value screenshare-bot)"
+          REMOTE

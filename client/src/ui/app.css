@@ -1,0 +1,523 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  --accent: #5865f2;
+  --accent-hover: #4752c4;
+}
+
+body {
+  margin: 0;
+  background: #1e1f22;
+  color: #f2f3f5;
+  min-height: 100vh;
+  padding: 1rem;
+  box-sizing: border-box;
+}
+
+body.no-scroll {
+  overflow: hidden;
+}
+
+#app {
+  width: 100%;
+  max-width: 100%;
+}
+
+/* Viewer page (index.html, added by mountApp): a fixed-height column that never
+   scrolls. The player flexes into whatever space is left over, so a visible status
+   line shrinks the video instead of overflowing the viewport and adding a scrollbar. */
+body.viewer {
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+body.viewer #app {
+  flex: 1 1 auto;
+  min-height: 0; /* lets the flex item shrink below its content's intrinsic height */
+}
+
+body.viewer .status {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+/* --- present.html: the standalone tab the Activity opens for actual capture --- */
+.present-card {
+  max-width: 460px;
+  margin: 6vh auto 0;
+  padding: 2rem 1.75rem;
+  border-radius: 14px;
+  background: #2b2d31;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+  text-align: center;
+}
+
+.present-icon {
+  color: var(--accent);
+  margin-bottom: 0.25rem;
+}
+
+.present-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.present-lead {
+  margin: 0 0 1.5rem;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #b5bac1;
+}
+
+.quality-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.quality-field {
+  /* Three fields share this row; on a narrow window they wrap instead of squeezing the
+     longer labels ("Taxa de quadros", "Qualidade") down to unreadable slivers. */
+  flex: 1 1 8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  text-align: left;
+  font-size: 0.78rem;
+  color: #b5bac1;
+}
+
+.quality-field select {
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #1e1f22;
+  color: #f2f3f5;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.quality-field select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.quality-hint {
+  margin: 0 0 1.25rem;
+  font-size: 0.76rem;
+  color: #949ba4;
+}
+
+.present-tip {
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.7rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  text-align: left;
+  color: #b5bac1;
+}
+
+.present-tip strong {
+  color: #f2f3f5;
+}
+
+/* Empty by default; only takes space once a warning is set (e.g. no audio captured). */
+.audio-notice {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.audio-notice:empty {
+  display: none;
+}
+
+.audio-notice.is-warning {
+  margin-bottom: 1rem;
+  padding: 0.6rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid rgba(240, 178, 50, 0.35);
+  background: rgba(240, 178, 50, 0.1);
+  color: #f0b232;
+}
+
+.btn-lg {
+  width: 100%;
+  padding: 0.75rem 1.25rem;
+  font-size: 0.95rem;
+}
+
+.btn-primary.is-stop {
+  background: #da373c;
+  box-shadow: 0 2px 8px rgba(218, 55, 60, 0.35);
+}
+
+.btn-primary.is-stop:hover {
+  background: #b52e32;
+}
+
+/* --- present.html's simple (non-overlay) layout --- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.btn-primary {
+  padding: 0.55rem 1.1rem;
+  border-radius: 999px;
+  border: none;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(88, 101, 242, 0.35);
+  transition:
+    background 0.15s ease,
+    transform 0.15s ease;
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+/* --- index.html's viewer: canvas with a floating control bar overlaid on top,
+   instead of stacked above it, so controls never push the video down/smaller --- */
+.player {
+  position: relative;
+  width: 100%;
+  /* Fills the height its flex parent hands it (see body.viewer #app) rather than a
+     hardcoded viewport calc, so the stream uses every available pixel without
+     overflowing when sibling content (the status line) is visible. The canvas
+     letterboxes inside via object-fit: contain. */
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  border-radius: 12px;
+  overflow: hidden;
+  line-height: 0; /* avoid a stray gap under the canvas from inline-baseline alignment */
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+}
+
+.player.is-fullscreen {
+  position: fixed;
+  inset: 0;
+  /* Must reset the base rule's calc(100vh - 2rem): with an explicit height set, an
+     absolutely-positioned box ignores `bottom`, leaving a 2rem black strip along the
+     bottom edge. `auto` lets the top/bottom insets size it to the full viewport. */
+  height: auto;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+#viewer-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* Invisible hover target along the bottom of the player. Hovering anywhere in this
+   strip reveals the control bar (standard video-player behavior), and it stays
+   revealed while the pointer is over the controls themselves since they live inside
+   it. Works identically in both normal and fullscreen mode because it's anchored to
+   .player, which fills the viewport when fullscreen. */
+.controls-zone {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 28%;
+  min-height: 90px;
+  display: flex;
+  align-items: flex-end;
+}
+
+.overlay-bar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.85rem 0.9rem 0.75rem;
+  box-sizing: border-box;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.82) 0%, rgba(0, 0, 0, 0.6) 45%, rgba(0, 0, 0, 0) 100%);
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  transform: translateY(0.6rem);
+  pointer-events: none;
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.controls-zone:hover .overlay-bar {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+/* Keeps the bar visible for keyboard users tabbing through the controls.
+   Deliberately :focus-visible and NOT :focus-within -- the latter also matches a
+   button left focused by a mouse click, which pinned the bar open permanently until
+   the window lost focus. Kept as its own rule (not merged into the :hover selector
+   list) so that if :has() is unsupported only this rule is dropped and hover survives. */
+.controls-zone:has(:focus-visible) .overlay-bar {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+/* Share button doubles as the primary CTA inside the overlay: icon + label, pill shape. */
+.btn-share {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  border: none;
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+  font-size: 0.82rem;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(88, 101, 242, 0.45);
+  transition:
+    background 0.15s ease,
+    transform 0.15s ease;
+}
+
+.btn-share:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+.btn-share:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* Presenter's own broadcast: the same button becomes the stop action, in red so it
+   reads as destructive rather than as another way to start sharing. */
+.btn-share.is-stop {
+  background: #da373c;
+  box-shadow: 0 2px 10px rgba(218, 55, 60, 0.45);
+}
+
+.btn-share.is-stop:hover:not(:disabled) {
+  background: #b52e32;
+}
+
+/* Placeholder shown while nobody is broadcasting (and right after one ends), so the
+   panel never sits on a black void or a frozen last frame. */
+.idle-screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 1.5rem;
+  text-align: center;
+  line-height: 1.4;
+  background: radial-gradient(circle at 50% 40%, #2b2d31 0%, #1a1b1e 70%);
+  transition: opacity 0.2s ease;
+}
+
+.idle-screen.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.idle-icon {
+  color: #4e5058;
+  margin-bottom: 0.4rem;
+}
+
+.idle-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #f2f3f5;
+}
+
+.idle-subtitle {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #b5bac1;
+  max-width: 32ch;
+}
+
+#resume-btn {
+  margin-top: 0.6rem;
+}
+
+#resume-btn.is-hidden {
+  display: none;
+}
+
+.status-text {
+  flex-shrink: 1;
+  min-width: 0;
+  font-size: 0.78rem;
+  color: #dbdee1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spacer {
+  flex: 1 1 auto;
+  min-width: 0.5rem;
+}
+
+.icon-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(6px);
+  color: #f2f3f5;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    transform 0.15s ease;
+}
+
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+.icon-btn:active {
+  transform: translateY(0);
+}
+
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.icon-btn:disabled:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.volume-group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  padding: 0.15rem 0.6rem 0.15rem 0.15rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.volume-group .icon-btn {
+  background: transparent;
+  border-color: transparent;
+}
+
+.volume-group .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Custom range slider: thin track with a solid fill up to the thumb (via --fill,
+   kept in sync with the input's value from App.ts), circular thumb on hover-grow. */
+.volume-slider {
+  appearance: none;
+  width: 80px;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0%,
+    var(--accent) var(--fill, 100%),
+    rgba(255, 255, 255, 0.25) var(--fill, 100%),
+    rgba(255, 255, 255, 0.25) 100%
+  );
+  cursor: pointer;
+  outline: none;
+}
+
+.volume-slider:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.volume-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.volume-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+
+.volume-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.volume-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.volume-slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: none;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+
+.status {
+  color: #b5bac1;
+  font-size: 0.875rem;
+}
+
+/* The viewer clears this element once connected; collapsing it when empty keeps the
+   full-height .player from overflowing the viewport and adding a scrollbar. */
+.status:empty {
+  display: none;
+}

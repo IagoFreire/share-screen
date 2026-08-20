@@ -1,0 +1,9 @@
+# Production reverse proxy for the Lightsail deploy (see docs/DEPLOY.md).
+# Terminates TLS itself (automatic Let's Encrypt) instead of sitting behind a
+# CDN/proxy -- a proxy that injects X-Frame-Options: SAMEORIGIN or a conflicting
+# frame-ancestors CSP breaks the Discord Activity iframe embed.
+share.iagofreire.dev {
+	# reverse_proxy upgrades WebSocket connections automatically -- /ws needs no
+	# special-casing here.
+	reverse_proxy localhost:3001
+}
