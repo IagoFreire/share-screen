@@ -79,6 +79,8 @@ export async function startVideoDecodePipeline(
   // and re-established whenever playback falls behind (see presentFrames).
   let baseTimestampUs: number | null = null;
   let basePerfMs = 0;
+  /** Frames older than this are discarded on arrival; raised by resyncToLive(). */
+  let minAcceptableTimestampUs = 0;
 
   function drawFrame(frame: VideoFrame): void {
     if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
@@ -100,13 +102,16 @@ export async function startVideoDecodePipeline(
   function dueThresholdUs(): number {
     const audioUs = clock?.currentTimestampUs() ?? null;
 
-    // Both tracks are stamped from the same capture clock, so anything wildly outside
-    // the buffered range means the assumption doesn't hold on this browser -- self-clock
-    // instead of freezing or flushing the queue on every tick.
-    const plausible =
-      audioUs !== null &&
-      audioUs >= queue[0]!.timestampUs - AV_SYNC_PLAUSIBILITY_WINDOW_US &&
-      audioUs <= queue[queue.length - 1]!.timestampUs + AV_SYNC_PLAUSIBILITY_WINDOW_US;
+    // Deliberately one-sided. Audio running *ahead* of every queued frame is not a
+    // broken timebase, it's video that fell behind -- a long alt-tab leaves the decoder
+    // producing frames while rendering is throttled -- and the right answer there is to
+    // trust the clock so the loop below discards the backlog and jumps to live. Treating
+    // that as implausible is what made the picture replay the backlog from its oldest
+    // frame while audio stayed current.
+    //
+    // The direction that genuinely has to be caught is audio far *behind* everything
+    // buffered: no frame would ever come due and the picture would freeze for good.
+    const plausible = audioUs !== null && audioUs >= queue[0]!.timestampUs - AV_SYNC_PLAUSIBILITY_WINDOW_US;
 
     if (plausible) {
       // Re-prime the fallback so it starts from live if audio later drops out.
@@ -150,6 +155,16 @@ export async function startVideoDecodePipeline(
     output: (frame) => {
       if (stopped) {
         frame.close();
+        return;
+      }
+
+      // Chunks handed to the decoder before a resync keep producing output afterwards,
+      // so emptying the queue isn't enough on its own -- that backlog would flow right
+      // back in and re-establish the delay we just dropped. Anything older than the
+      // resync point is stale by definition.
+      if (frame.timestamp < minAcceptableTimestampUs) {
+        frame.close();
+        droppedFrames += 1;
         return;
       }
 
@@ -200,6 +215,12 @@ export async function startVideoDecodePipeline(
       return droppedFrames;
     },
     resyncToLive: () => {
+      // Everything buffered is behind live, so the newest of it marks the cutoff: any
+      // frame decoded from here on that predates it belongs to the backlog being
+      // dropped, not to the stream we're resuming on.
+      const newestUs = queue[queue.length - 1]?.timestampUs;
+      if (newestUs !== undefined) minAcceptableTimestampUs = newestUs;
+
       for (const queued of queue) queued.frame.close();
       droppedFrames += queue.length;
       queue.length = 0;
