@@ -395,6 +395,51 @@ body.viewer .status {
   min-width: 0.5rem;
 }
 
+/* Broadcast picker, shown only when a room carries more than one live stream. Sits at
+   the top of the player so it never collides with the overlay controls at the bottom. */
+.stream-picker {
+  position: absolute;
+  top: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.25rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  max-width: calc(100% - 1.5rem);
+  overflow-x: auto;
+}
+
+.stream-tab {
+  flex-shrink: 0;
+  padding: 0.3rem 0.85rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.stream-tab:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f2f3f5;
+}
+
+.stream-tab.is-active {
+  background: #5865f2;
+  color: #fff;
+}
+
 .icon-btn {
   flex-shrink: 0;
   width: 34px;

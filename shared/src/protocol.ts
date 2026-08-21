@@ -85,6 +85,19 @@ export interface AudioParams {
   channels: number;
 }
 
+/**
+ * One live broadcast within a room. A room supports several at once (up to
+ * MAX_PRESENTERS_PER_ROOM), each pinned to the frame header's `slot` field, and every
+ * viewer picks exactly one to watch at a time -- so egress stays "viewers x bitrate"
+ * regardless of how many people are broadcasting.
+ */
+export interface StreamInfo {
+  /** Which frame slot carries this broadcast; assigned by the server, never the client. */
+  slot: number;
+  presenterId: string | null;
+  audio: AudioParams | null;
+}
+
 export type ControlMessage =
   /**
    * `userId` lets the server verify that a stop request comes from the presenter.
@@ -96,25 +109,27 @@ export type ControlMessage =
   | {
       kind: "joined";
       roomId: string;
-      hasPresenter: boolean;
-      presenterId: string | null;
-      audio: AudioParams | null;
+      /** Every broadcast currently live in the room; empty when nobody is presenting. */
+      streams: StreamInfo[];
       viewerCount: number;
     }
   /** Sent by the presenter tab (present.html). `presenterId` is the Discord user id
    *  so the Activity can tell "someone is presenting" from "*I* am presenting". */
   | { kind: "start-presenting"; presenterId: string | null; audio: AudioParams | null }
+  /** Server -> presenter tab: which slot was allocated. The tab must stamp this on every
+   *  frame it sends; the relay overwrites it anyway, but matching avoids confusion. */
+  | { kind: "presenting-started"; slot: number }
   | { kind: "stop-presenting" }
   /** Activity -> server -> presenter socket: asks the presenting tab to stop, so the
    *  user can end their own broadcast from inside Discord instead of hunting for the
    *  browser tab that is actually doing the capture. */
   | { kind: "request-stop-presenting" }
-  | {
-      kind: "presenter-changed";
-      hasPresenter: boolean;
-      presenterId: string | null;
-      audio: AudioParams | null;
-    }
+  /** Broadcast whenever a stream starts or stops, replacing the whole list so viewers
+   *  never have to reconstruct it from deltas. */
+  | { kind: "streams-changed"; streams: StreamInfo[] }
+  /** Client -> server: watch this slot and stop receiving whatever it was watching.
+   *  A viewer receives exactly one stream at a time no matter how many are live. */
+  | { kind: "select-stream"; slot: number }
   | { kind: "viewer-count"; count: number }
   | { kind: "request-keyframe" }
   /**

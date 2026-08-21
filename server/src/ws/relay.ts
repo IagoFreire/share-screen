@@ -15,16 +15,24 @@ import { isUserInVoiceChannel } from "../auth/verifyMember.js";
 
 interface ConnectionState {
   roomId: string | null;
-  isPresenter: boolean;
   /** Discord user id claimed by this connection; used to authorise stop requests and
    *  to pair up a user's multiple simultaneous connections (Activity + an externally
    *  opened tab) for the pause/resume bandwidth-saving below. */
   userId: string | null;
+  /** Slot this connection broadcasts on, or null if it isn't presenting. */
+  presenterSlot: number | null;
   /**
-   * Whether this viewer has received a keyframe from the *current* broadcast yet. A
+   * Which broadcast this connection is watching. A room can carry several at once but a
+   * viewer receives exactly one, so this is what keeps egress at "viewers x bitrate"
+   * rather than multiplying by however many people happen to be live.
+   */
+  selectedSlot: number;
+  /**
+   * Whether this viewer has received a keyframe for the stream it currently watches. A
    * decoder can't do anything with a delta frame before its first keyframe, so
    * forwarding one is pure wasted egress -- this lets the relay skip it instead of
-   * relying solely on the viewer discarding it after the fact.
+   * relying solely on the viewer discarding it after the fact. Reset whenever the
+   * selected slot changes, since the new stream's decoder starts cold.
    */
   hasReceivedKeyframe: boolean;
   /**
@@ -47,8 +55,9 @@ function getState(ws: WebSocket): ConnectionState {
   if (!state) {
     state = {
       roomId: null,
-      isPresenter: false,
       userId: null,
+      presenterSlot: null,
+      selectedSlot: SLOT_PRESENTER,
       hasReceivedKeyframe: false,
       isPaused: false,
       videoDisabled: false,
@@ -67,11 +76,17 @@ function send(ws: WebSocket, message: ControlMessage): void {
 function broadcastControl(room: Room, message: ControlMessage): void {
   const encoded = encodeControlMessage(SLOT_PRESENTER, message);
   room.forEachViewer((viewer) => sendOrDrop(viewer, encoded));
-  if (room.presenter) sendOrDrop(room.presenter, encoded);
+  room.forEachPresenter((presenter) => sendOrDrop(presenter, encoded));
 }
 
-function requestKeyframeFromPresenter(room: Room): void {
-  if (room.presenter) send(room.presenter, { kind: "request-keyframe" });
+/** Tells everyone the set of live broadcasts changed, so viewers can update their picker. */
+function broadcastStreams(room: Room): void {
+  broadcastControl(room, { kind: "streams-changed", streams: room.streams });
+}
+
+function requestKeyframeFromSlot(room: Room, slot: number): void {
+  const presenter = room.getPresenter(slot);
+  if (presenter) send(presenter.ws, { kind: "request-keyframe" });
 }
 
 /**
@@ -101,7 +116,7 @@ function resumeConnectionForUser(room: Room, userId: string): void {
     viewerState.isPaused = false;
     viewerState.hasReceivedKeyframe = false;
     send(viewer, { kind: "viewing-resumed" });
-    requestKeyframeFromPresenter(room);
+    requestKeyframeFromSlot(room, viewerState.selectedSlot);
   });
 }
 
@@ -114,20 +129,27 @@ export function handleMessage(ws: WebSocket, data: Uint8Array): void {
     return;
   }
 
-  // Only the room's current presenter may publish video/audio frames.
+  // Only a registered presenter may publish video/audio frames.
   const state = getState(ws);
-  if (!state.roomId || !state.isPresenter) return;
+  if (!state.roomId || state.presenterSlot === null) return;
 
   const room = roomManager.getRoom(state.roomId);
-  if (!room || room.presenter !== ws) return;
+  if (!room) return;
+
+  // Take the slot from server-side state, never from the frame the client sent: a
+  // presenter that stamped someone else's slot would otherwise inject video into their
+  // broadcast, and every viewer watching that person would see it.
+  const slot = room.slotOf(ws);
+  if (slot === null || slot !== state.presenterSlot) return;
 
   // Audio is prioritised so a congested link thins the video rather than breaking speech.
   const priority = frame.type === FrameType.Audio ? "audio" : "video";
-  const outgoing = encodeFrame(frame, frame.payload);
+  const outgoing = encodeFrame({ ...frame, slot }, frame.payload);
 
   room.forEachViewer((viewer) => {
     const viewerState = getState(viewer);
     if (viewerState.isPaused) return; // watching via another tab right now
+    if (viewerState.selectedSlot !== slot) return; // watching a different broadcast
 
     if (frame.type === FrameType.Video) {
       if (viewerState.videoDisabled) return; // chose audio-only
@@ -170,14 +192,18 @@ async function handleJoin(
   state.userId = message.userId;
   room.addViewer(ws);
 
+  // Default to the lowest live slot so a viewer joining mid-broadcast sees something
+  // immediately rather than an empty player until they pick from the list.
+  const streams = room.streams;
+  state.selectedSlot = streams[0]?.slot ?? SLOT_PRESENTER;
+  state.hasReceivedKeyframe = false;
+
   if (message.userId) pauseOtherConnectionsForUser(room, message.userId, ws);
 
   send(ws, {
     kind: "joined",
     roomId: message.roomId,
-    hasPresenter: room.hasPresenter,
-    presenterId: room.presenterId,
-    audio: room.audioParams,
+    streams,
     viewerCount: room.viewerCount,
   });
 }
@@ -196,22 +222,18 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       const room = roomManager.getRoom(state.roomId);
       if (!room) return;
 
-      if (!room.setPresenter(ws, message.presenterId, message.audio)) {
-        send(ws, { kind: "error", message: "Room already has a presenter." });
+      const slot = room.allocateSlot(ws, message.presenterId, message.audio);
+      if (slot === null) {
+        send(ws, { kind: "error", message: "Room already has the maximum number of broadcasts." });
         return;
       }
       state.userId = message.presenterId;
-      state.isPresenter = true;
+      state.presenterSlot = slot;
+      // A presenting socket stops being a viewer: it never watches its own stream.
       room.removeViewer(ws);
-      room.forEachViewer((viewer) => {
-        getState(viewer).hasReceivedKeyframe = false;
-      });
-      broadcastControl(room, {
-        kind: "presenter-changed",
-        hasPresenter: true,
-        presenterId: room.presenterId,
-        audio: room.audioParams,
-      });
+
+      send(ws, { kind: "presenting-started", slot });
+      broadcastStreams(room);
       return;
     }
 
@@ -220,29 +242,45 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       const room = roomManager.getRoom(state.roomId);
       if (!room) return;
 
-      room.clearPresenterIfMatches(ws);
-      state.isPresenter = false;
-      broadcastControl(room, { kind: "presenter-changed", hasPresenter: false, presenterId: null, audio: null });
+      const freed = room.clearSlotFor(ws);
+      state.presenterSlot = null;
+      if (freed !== null) handleSlotWentAway(room, freed);
       return;
     }
 
     // Forwarded to the presenting tab, which owns the capture and actually stops it.
-    // Gated on the requester being the presenter, so one viewer can't cut off someone
-    // else's broadcast.
+    // Gated on the requester owning that broadcast, so one viewer can't cut off someone
+    // else's stream.
     case "request-stop-presenting": {
+      if (!state.roomId || !state.userId) return;
+      const room = roomManager.getRoom(state.roomId);
+      if (!room) return;
+
+      const slot = room.slotOfUser(state.userId);
+      if (slot === null) return;
+      const presenter = room.getPresenter(slot);
+      if (presenter) send(presenter.ws, { kind: "request-stop-presenting" });
+      return;
+    }
+
+    // Switch which broadcast this viewer receives. The old stream stops flowing
+    // immediately, so watching two at once is never possible -- that's the whole reason
+    // extra presenters cost no extra egress.
+    case "select-stream": {
       if (!state.roomId) return;
       const room = roomManager.getRoom(state.roomId);
-      if (!room?.presenter || !room.presenterId) return;
-      if (room.presenterId !== state.userId) return;
+      if (!room) return;
 
-      send(room.presenter, { kind: "request-stop-presenting" });
+      state.selectedSlot = message.slot;
+      state.hasReceivedKeyframe = false; // new stream, decoder starts cold
+      requestKeyframeFromSlot(room, message.slot);
       return;
     }
 
     case "request-keyframe": {
       if (!state.roomId) return;
       const room = roomManager.getRoom(state.roomId);
-      if (room) requestKeyframeFromPresenter(room);
+      if (room) requestKeyframeFromSlot(room, state.selectedSlot);
       return;
     }
 
@@ -256,7 +294,7 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       state.isPaused = false;
       state.hasReceivedKeyframe = false;
       send(ws, { kind: "viewing-resumed" });
-      requestKeyframeFromPresenter(room);
+      requestKeyframeFromSlot(room, state.selectedSlot);
       return;
     }
 
@@ -267,7 +305,7 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       if (message.enabled && state.roomId) {
         state.hasReceivedKeyframe = false; // missed whatever aired while video was off
         const room = roomManager.getRoom(state.roomId);
-        if (room) requestKeyframeFromPresenter(room);
+        if (room) requestKeyframeFromSlot(room, state.selectedSlot);
       }
       return;
     }
@@ -277,6 +315,27 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
   }
 }
 
+/**
+ * A broadcast ended. Anyone who was watching it is now staring at a frozen last frame,
+ * so move them to another live stream if there is one; otherwise leave them on the slot
+ * so they pick the picture back up if that presenter returns.
+ */
+function handleSlotWentAway(room: Room, freedSlot: number): void {
+  const remaining = room.streams;
+  const fallback = remaining[0]?.slot ?? null;
+
+  room.forEachViewer((viewer) => {
+    const viewerState = getState(viewer);
+    if (viewerState.selectedSlot !== freedSlot) return;
+
+    viewerState.hasReceivedKeyframe = false;
+    if (fallback !== null) viewerState.selectedSlot = fallback;
+  });
+
+  broadcastStreams(room);
+  if (fallback !== null) requestKeyframeFromSlot(room, fallback);
+}
+
 export function handleClose(ws: WebSocket): void {
   const state = connectionState.get(ws);
   clearBackpressureState(ws);
@@ -284,9 +343,9 @@ export function handleClose(ws: WebSocket): void {
 
   const room = roomManager.getRoom(state.roomId);
   if (room) {
-    if (state.isPresenter) {
-      room.clearPresenterIfMatches(ws);
-      broadcastControl(room, { kind: "presenter-changed", hasPresenter: false, presenterId: null, audio: null });
+    const freed = room.clearSlotFor(ws);
+    if (freed !== null) {
+      handleSlotWentAway(room, freed);
     } else {
       room.removeViewer(ws);
       broadcastControl(room, { kind: "viewer-count", count: room.viewerCount });

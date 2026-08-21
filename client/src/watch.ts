@@ -1,7 +1,13 @@
 // See main.ts: the stylesheet is imported from JS so Discord's proxy can't pin a
 // stale copy of a never-changing stylesheet URL.
 import "./ui/app.css";
-import { FrameType, type AudioParams, type ControlMessage, type EncodedFrame } from "@screenshare-bot/shared";
+import {
+  FrameType,
+  type AudioParams,
+  type ControlMessage,
+  type EncodedFrame,
+  type StreamInfo,
+} from "@screenshare-bot/shared";
 import { WsClient } from "./net/wsClient.js";
 import { startVideoDecodePipeline, type VideoDecodePipeline } from "./playback/videoDecodePipeline.js";
 import { startAudioDecodePipeline, type AudioDecodePipeline } from "./playback/audioDecodePipeline.js";
@@ -50,6 +56,7 @@ function main(): void {
   root.innerHTML = `
     <div class="player" id="player">
       <canvas id="viewer-canvas"></canvas>
+      <div class="stream-picker" id="stream-picker" role="tablist" aria-label="Escolher transmissão"></div>
       <div class="idle-screen" id="idle-screen">
         <div class="idle-icon">${ICON_IDLE}</div>
         <p class="idle-title" id="idle-title">Ninguém está transmitindo</p>
@@ -82,6 +89,7 @@ function main(): void {
   const idleTitle = root.querySelector<HTMLParagraphElement>("#idle-title")!;
   const idleSubtitle = root.querySelector<HTMLParagraphElement>("#idle-subtitle")!;
   const resumeButton = root.querySelector<HTMLButtonElement>("#resume-btn")!;
+  const streamPicker = root.querySelector<HTMLDivElement>("#stream-picker")!;
 
   // Shared between the two decode pipelines so video plays against audio's clock rather
   // than its own -- see playback/mediaClock.ts. Outlives both, since they're torn down
@@ -95,7 +103,10 @@ function main(): void {
    *  pipeline currently exists, so resuming after a pause knows what to (re)create. */
   let lastAudioParams: AudioParams | null = null;
   let viewerCount = 0;
-  let presenterId: string | null = null;
+  /** Every broadcast live in this room. A room can carry several at once. */
+  let streams: StreamInfo[] = [];
+  /** Which of them this tab is receiving -- exactly one at a time. */
+  let selectedSlot = 0;
   let lastVolumeBeforeMute = 1;
   /** True while the server has paused this connection because the same user has
    *  another tab (the Activity, or yet another external tab) already receiving it. */
@@ -113,17 +124,24 @@ function main(): void {
    */
   let videoPipelineGeneration = 0;
 
-  const isSelf = () => userId !== "" && presenterId === userId;
-  const hasPresenter = () => presenterId !== null;
+  const currentStream = (): StreamInfo | undefined => streams.find((s) => s.slot === selectedSlot);
+  /** True when the stream being watched is this user's own broadcast. */
+  const isSelf = () => userId !== "" && currentStream()?.presenterId === userId;
+  const hasPresenter = () => streams.length > 0;
+  const audioParamsForSelection = () => currentStream()?.audio ?? null;
 
   function render(): void {
-    if (hasPresenter()) {
+    if (streams.length > 1) {
+      statusText.textContent = `${streams.length} transmissões — ${viewerCount} espectador(es).`;
+    } else if (hasPresenter()) {
       statusText.textContent = isSelf()
         ? `Sua transmissão — ${viewerCount} espectador(es).`
         : `Alguém está transmitindo — ${viewerCount} espectador(es).`;
     } else {
       statusText.textContent = `${viewerCount} pessoa(s) na sala.`;
     }
+
+    renderStreamPicker();
 
     // Being paused only matters visibly once there's actually a broadcast it's saving
     // bandwidth on -- with no presenter nothing was going to be sent either way, so
@@ -169,6 +187,47 @@ function main(): void {
     videoToggleButton.disabled = isPausedHere || !hasPresenter();
     videoToggleButton.innerHTML = videoDisabled ? ICON_VIDEO_OFF : ICON_VIDEO;
     videoToggleButton.title = videoDisabled ? "Ativar vídeo" : "Desativar vídeo (somente áudio)";
+  }
+
+  /** Tabs for picking which broadcast to watch -- see App.ts for the rationale. */
+  function renderStreamPicker(): void {
+    if (streams.length < 2) {
+      streamPicker.style.display = "none";
+      streamPicker.replaceChildren();
+      return;
+    }
+    streamPicker.style.display = "";
+
+    streamPicker.replaceChildren(
+      ...streams.map((stream, index) => {
+        const tab = document.createElement("button");
+        tab.type = "button";
+        tab.className = "stream-tab";
+        tab.setAttribute("role", "tab");
+        const isSelected = stream.slot === selectedSlot;
+        tab.classList.toggle("is-active", isSelected);
+        tab.setAttribute("aria-selected", String(isSelected));
+        tab.textContent =
+          userId !== "" && stream.presenterId === userId ? "Sua transmissão" : `Transmissão ${index + 1}`;
+        tab.addEventListener("click", () => void selectStream(stream.slot));
+        return tab;
+      }),
+    );
+  }
+
+  /** Switches which broadcast is received -- see App.ts for why both pipelines restart. */
+  async function selectStream(slot: number): Promise<void> {
+    if (slot === selectedSlot) return;
+    selectedSlot = slot;
+    wsClient.sendControl({ kind: "select-stream", slot });
+
+    teardownVideoPipeline();
+    canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    render();
+
+    await ensureVideoPipeline();
+    void ensureAudioPipeline(audioParamsForSelection());
+    wsClient.sendControl({ kind: "request-keyframe" });
   }
 
   const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -237,8 +296,10 @@ function main(): void {
         // showing "Retomar aqui" forever over a feed that's actually flowing fine.
         isPausedHere = false;
         viewerCount = message.viewerCount;
-        presenterId = message.presenterId;
-        lastAudioParams = message.audio;
+        streams = message.streams;
+        // Mirror the server's choice of default slot for a fresh connection.
+        selectedSlot = streams[0]?.slot ?? 0;
+        lastAudioParams = audioParamsForSelection();
         render();
         setPageStatus("");
         void ensureVideoPipeline();
@@ -254,15 +315,19 @@ function main(): void {
         render();
         return;
 
-      case "presenter-changed":
-        presenterId = message.presenterId;
-        lastAudioParams = message.audio;
+      case "streams-changed": {
+        streams = message.streams;
+        // The watched stream may have ended; the server already moved this connection
+        // to a surviving slot, so follow it instead of receiving nothing.
+        if (!currentStream()) selectedSlot = streams[0]?.slot ?? selectedSlot;
+        lastAudioParams = audioParamsForSelection();
         render();
         if (!isPausedHere) {
           void ensureAudioPipeline(lastAudioParams);
-          if (message.hasPresenter) wsClient.sendControl({ kind: "request-keyframe" });
+          if (hasPresenter()) wsClient.sendControl({ kind: "request-keyframe" });
         }
         return;
+      }
 
       // Another tab for this same user is now receiving the stream -- tear down our
       // own pipelines here so it isn't sent to us twice.

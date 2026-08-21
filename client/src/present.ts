@@ -116,6 +116,8 @@ function main(): void {
   let isPresenting = false;
   let videoClock = 0;
   let audioClock = 0;
+  /** Frame slot assigned by the server when this tab started presenting. */
+  let presenterSlot = SLOT_PRESENTER;
 
   // Restore the previous choice so a presenter who always uses, say, 720p30 doesn't
   // have to re-pick it every time the Activity opens this tab.
@@ -196,6 +198,11 @@ function main(): void {
       case "joined":
         setStatus("");
         return;
+      // The server decides which slot this broadcast occupies, since a room can carry
+      // several at once. Stamp it on outgoing frames from here on.
+      case "presenting-started":
+        presenterSlot = message.slot;
+        return;
       case "room-full":
         setStatus("Sala cheia - nao foi possivel entrar.");
         return;
@@ -237,7 +244,7 @@ function main(): void {
         videoClock += 1;
         wsClient.sendFrame(
           {
-            slot: SLOT_PRESENTER,
+            slot: presenterSlot,
             type: FrameType.Video,
             // The chunk's own timestamp (inherited from the captured VideoFrame), NOT
             // performance.now(). Stamping at send time bakes in however long this frame
@@ -266,7 +273,7 @@ function main(): void {
             // Capture timestamp rather than send time, for the same reason as video
             // above -- and critically, on the same capture clock as the video track, so
             // the viewer can align the two streams instead of guessing.
-            { slot: SLOT_PRESENTER, type: FrameType.Audio, timestamp: chunk.timestamp / 1000, clock: audioClock },
+            { slot: presenterSlot, type: FrameType.Audio, timestamp: chunk.timestamp / 1000, clock: audioClock },
             payload,
           );
         });

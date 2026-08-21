@@ -1,4 +1,11 @@
-import { FrameType, type AudioParams, type ControlMessage, type EncodedFrame } from "@screenshare-bot/shared";
+import {
+  FrameType,
+  MAX_PRESENTERS_PER_ROOM,
+  type AudioParams,
+  type ControlMessage,
+  type EncodedFrame,
+  type StreamInfo,
+} from "@screenshare-bot/shared";
 import { WsClient } from "../net/wsClient.js";
 import { startVideoDecodePipeline, type VideoDecodePipeline } from "../playback/videoDecodePipeline.js";
 import { startAudioDecodePipeline, type AudioDecodePipeline } from "../playback/audioDecodePipeline.js";
@@ -48,6 +55,7 @@ export function mountApp(options: MountAppOptions): void {
   root.innerHTML = `
     <div class="player" id="player">
       <canvas id="viewer-canvas"></canvas>
+      <div class="stream-picker" id="stream-picker" role="tablist" aria-label="Escolher transmissão"></div>
       <div class="idle-screen" id="idle-screen">
         <div class="idle-icon">${ICON_IDLE}</div>
         <p class="idle-title" id="idle-title">Ninguém está transmitindo</p>
@@ -84,6 +92,7 @@ export function mountApp(options: MountAppOptions): void {
   const idleTitle = root.querySelector<HTMLParagraphElement>("#idle-title")!;
   const idleSubtitle = root.querySelector<HTMLParagraphElement>("#idle-subtitle")!;
   const resumeButton = root.querySelector<HTMLButtonElement>("#resume-btn")!;
+  const streamPicker = root.querySelector<HTMLDivElement>("#stream-picker")!;
 
   // Shared between the two decode pipelines so video plays against audio's clock rather
   // than its own -- see playback/mediaClock.ts. Outlives both, since they're torn down
@@ -97,7 +106,10 @@ export function mountApp(options: MountAppOptions): void {
    *  pipeline currently exists, so resuming after a pause knows what to (re)create. */
   let lastAudioParams: AudioParams | null = null;
   let viewerCount = 0;
-  let presenterId: string | null = null;
+  /** Every broadcast live in this room. A room can carry several at once. */
+  let streams: StreamInfo[] = [];
+  /** Which of them this viewer is receiving -- exactly one at a time. */
+  let selectedSlot = 0;
   let lastVolumeBeforeMute = 1;
   let isPseudoFullscreen = false;
   /** True while the server has paused this connection because the same user opened
@@ -116,8 +128,19 @@ export function mountApp(options: MountAppOptions): void {
    */
   let videoPipelineGeneration = 0;
 
-  const isPresenting = () => presenterId !== null && presenterId === userId;
-  const hasPresenter = () => presenterId !== null;
+  /** The broadcast currently being received, if it's still live. */
+  const currentStream = (): StreamInfo | undefined => streams.find((s) => s.slot === selectedSlot);
+  /** True when *this user* is broadcasting, on any slot -- drives the share/stop button. */
+  const isPresenting = () => streams.some((s) => s.presenterId !== null && s.presenterId === userId);
+  /** True when the stream being watched is this user's own, which is what decides
+   *  whether audio must be suppressed (hearing yourself back) -- distinct from
+   *  isPresenting(), since you can broadcast while watching someone else. */
+  const isWatchingSelf = () => {
+    const stream = currentStream();
+    return stream?.presenterId !== null && stream?.presenterId === userId;
+  };
+  const hasPresenter = () => streams.length > 0;
+  const audioParamsForSelection = () => currentStream()?.audio ?? null;
 
   /** Single place that reflects presenter state into the button, status line and idle screen. */
   function render(): void {
@@ -128,19 +151,25 @@ export function mountApp(options: MountAppOptions): void {
       : `${ICON_SHARE}<span>Compartilhar tela</span>`;
     shareButton.classList.toggle("is-stop", presenting);
 
-    // Someone else already holds the presenter slot: the server would reject a second
-    // one, so surface that here instead of opening a tab that fails.
-    const blockedByOther = hasPresenter() && !presenting;
-    shareButton.disabled = blockedByOther;
-    shareButton.title = blockedByOther ? "Outra pessoa já está transmitindo." : "";
+    // Every slot is taken by someone else: the server would reject another broadcast,
+    // so surface that here instead of opening a tab that fails.
+    const roomFull = streams.length >= MAX_PRESENTERS_PER_ROOM && !presenting;
+    shareButton.disabled = roomFull;
+    shareButton.title = roomFull
+      ? `Limite de ${MAX_PRESENTERS_PER_ROOM} transmissões simultâneas atingido.`
+      : "";
 
     if (presenting) {
       statusText.textContent = `Você está transmitindo — ${viewerCount} espectador(es).`;
+    } else if (streams.length > 1) {
+      statusText.textContent = `${streams.length} transmissões — ${viewerCount} espectador(es).`;
     } else if (hasPresenter()) {
       statusText.textContent = `Alguém está transmitindo — ${viewerCount} espectador(es).`;
     } else {
       statusText.textContent = `${viewerCount} pessoa(s) na sala.`;
     }
+
+    renderStreamPicker();
 
     // Being paused only matters visibly once there's actually a broadcast it's saving
     // bandwidth on -- with no presenter nothing was going to be sent either way, so
@@ -151,16 +180,18 @@ export function mountApp(options: MountAppOptions): void {
     const showPausedUi = isPausedHere && hasPresenter();
     // Audio-only is its own idle-screen state, one rung below "paused" in priority --
     // there's no video pipeline running so the canvas would otherwise just be a blank
-    // void, same reasoning as the paused case above. Not shown while presenting: your
-    // own audio is always blocked (see ensureAudioPipeline), so "audio-only" would be a
-    // lie for your own feed -- showVideoOffSelfUi below covers that case instead.
-    const showAudioOnlyUi = !showPausedUi && !presenting && hasPresenter() && videoDisabled;
-    // Presenting doesn't block your own video the way it blocks your own audio: once
+    // void, same reasoning as the paused case above. Keyed off which stream is being
+    // *watched*, not whether you're broadcasting: your own feed never plays its audio
+    // back (see ensureAudioPipeline), so "audio-only" would be a lie for it --
+    // showVideoOffSelfUi covers that case instead.
+    const watchingSelf = isWatchingSelf();
+    const showAudioOnlyUi = !showPausedUi && !watchingSelf && hasPresenter() && videoDisabled;
+    // Watching your own broadcast doesn't block video the way it blocks audio: once
     // you hit "Retomar aqui" your Activity connection is a live viewer of your own
     // broadcast (see the resume-viewing handler on the server), so the video toggle is
-    // just as real for a resumed presenter as for any other viewer -- it just can't be
-    // framed as "audio-only" since there's never any audio to fall back to for yourself.
-    const showVideoOffSelfUi = !showPausedUi && presenting && videoDisabled;
+    // just as real here as for any other viewer -- it just can't be framed as
+    // "audio-only" since there's never any audio to fall back to for yourself.
+    const showVideoOffSelfUi = !showPausedUi && watchingSelf && videoDisabled;
     const showIdleScreen = !hasPresenter() || showPausedUi || showAudioOnlyUi || showVideoOffSelfUi;
     idleScreen.classList.toggle("is-hidden", !showIdleScreen);
 
@@ -182,16 +213,14 @@ export function mountApp(options: MountAppOptions): void {
       idleSubtitle.textContent = "Sua prévia está oculta. Clique no ícone de câmera para mostrar de novo.";
     } else if (!hasPresenter()) {
       idleTitle.textContent = "Ninguém está transmitindo";
-      idleSubtitle.textContent = blockedByOther
-        ? ""
-        : "Clique em “Compartilhar tela” para começar a transmitir.";
+      idleSubtitle.textContent = "Clique em “Compartilhar tela” para começar a transmitir.";
     }
 
     // The presenter never gets their own audio decoded (see ensureAudioPipeline), and a
     // paused connection has no pipeline running at all -- either way there's nothing
     // for these controls to adjust, so show muted and lock them rather than leaving a
     // volume slider that visibly does nothing.
-    const controlsDisabled = presenting || isPausedHere;
+    const controlsDisabled = watchingSelf || isPausedHere;
     muteButton.disabled = controlsDisabled;
     volumeSlider.disabled = controlsDisabled;
     muteButton.innerHTML = controlsDisabled || Number(volumeSlider.value) === 0 ? ICON_MUTED : ICON_VOLUME;
@@ -203,6 +232,59 @@ export function mountApp(options: MountAppOptions): void {
     videoToggleButton.disabled = isPausedHere || !hasPresenter();
     videoToggleButton.innerHTML = videoDisabled ? ICON_VIDEO_OFF : ICON_VIDEO;
     videoToggleButton.title = videoDisabled ? "Ativar vídeo" : "Desativar vídeo (somente áudio)";
+  }
+
+  /**
+   * Tabs for picking which broadcast to watch. Hidden entirely with fewer than two, so
+   * the common single-broadcast case looks exactly as it did before this existed.
+   */
+  function renderStreamPicker(): void {
+    if (streams.length < 2) {
+      streamPicker.style.display = "none";
+      streamPicker.replaceChildren();
+      return;
+    }
+    streamPicker.style.display = "";
+
+    streamPicker.replaceChildren(
+      ...streams.map((stream, index) => {
+        const tab = document.createElement("button");
+        tab.type = "button";
+        tab.className = "stream-tab";
+        tab.setAttribute("role", "tab");
+        const isSelected = stream.slot === selectedSlot;
+        tab.classList.toggle("is-active", isSelected);
+        tab.setAttribute("aria-selected", String(isSelected));
+        // No display names available here -- the Activity only ever learns user ids --
+        // so identify the broadcaster by position, with "você" for your own.
+        tab.textContent =
+          stream.presenterId !== null && stream.presenterId === userId
+            ? "Sua transmissão"
+            : `Transmissão ${index + 1}`;
+        tab.addEventListener("click", () => void selectStream(stream.slot));
+        return tab;
+      }),
+    );
+  }
+
+  /**
+   * Switches which broadcast is received. The server stops sending the old one the
+   * moment it processes this, so the decoders have to be rebuilt: the new stream's
+   * video decoder starts cold (needs a keyframe) and its audio may well have different
+   * Opus parameters, which an AudioDecoder can't be reconfigured into mid-flight.
+   */
+  async function selectStream(slot: number): Promise<void> {
+    if (slot === selectedSlot) return;
+    selectedSlot = slot;
+    wsClient.sendControl({ kind: "select-stream", slot });
+
+    teardownVideoPipeline();
+    clearCanvas();
+    render();
+
+    await ensureVideoPipeline();
+    ensureAudioPipeline(audioParamsForSelection());
+    wsClient.sendControl({ kind: "request-keyframe" });
   }
 
   const wsClient = new WsClient(wsUrl, {
@@ -227,8 +309,11 @@ export function mountApp(options: MountAppOptions): void {
         // actually flowing fine.
         isPausedHere = false;
         viewerCount = message.viewerCount;
-        presenterId = message.presenterId;
-        lastAudioParams = message.audio;
+        streams = message.streams;
+        // The server picks the lowest live slot for a fresh connection; mirror that so
+        // the client doesn't ask for a stream it isn't actually being sent.
+        selectedSlot = streams[0]?.slot ?? 0;
+        lastAudioParams = audioParamsForSelection();
         render();
         setPageStatus("");
         void ensureVideoPipeline();
@@ -244,21 +329,26 @@ export function mountApp(options: MountAppOptions): void {
         render();
         return;
 
-      case "presenter-changed":
-        presenterId = message.presenterId;
-        lastAudioParams = message.audio;
+      case "streams-changed": {
+        streams = message.streams;
+        // The stream being watched may have just ended. The server already moved this
+        // connection to a surviving slot (see handleSlotWentAway), so follow it rather
+        // than sitting on a slot that no longer exists and receiving nothing.
+        if (!currentStream()) selectedSlot = streams[0]?.slot ?? selectedSlot;
+        lastAudioParams = audioParamsForSelection();
         render();
         if (!isPausedHere) {
           ensureAudioPipeline(lastAudioParams);
-          if (message.hasPresenter) {
+          if (hasPresenter()) {
             wsClient.sendControl({ kind: "request-keyframe" });
           } else {
-            // Broadcast ended: drop the last decoded frame so the idle screen isn't
+            // Everything ended: drop the last decoded frame so the idle screen isn't
             // layered over a frozen still of whatever was on screen when it stopped.
             clearCanvas();
           }
         }
         return;
+      }
 
       // Another tab for this same user (present.html/watch.html) is now receiving the
       // stream -- tear down our own pipelines so it isn't sent to us twice.
@@ -312,8 +402,10 @@ export function mountApp(options: MountAppOptions): void {
    */
   function ensureAudioPipeline(params: AudioParams | null): void {
     // Never play back your own broadcast: the presenter has the Activity open too, so
-    // decoding their own audio here feeds it straight back out of their speakers.
-    if (isPresenting()) params = null;
+    // decoding their own audio here feeds it straight back out of their speakers. Keyed
+    // on the stream being *watched*, not on whether you're broadcasting -- while
+    // broadcasting you can be watching someone else, and their audio must still play.
+    if (isWatchingSelf()) params = null;
 
     const unchanged =
       params &&

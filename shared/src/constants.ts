@@ -1,6 +1,17 @@
 export const MAX_CONCURRENT_ROOMS_DEFAULT = 2;
 export const MAX_VIEWERS_PER_ROOM_DEFAULT = 10;
 
+/**
+ * How many people can broadcast at once inside one room, each on its own frame slot.
+ *
+ * Cheaper than it sounds: viewers watch one stream at a time, so egress stays
+ * "viewers x bitrate" no matter how many are live. What scales with this number is
+ * *ingress* (one upload per presenter), which doesn't count against the instance's
+ * outbound allowance. The cap is really about keeping the picker UI legible and
+ * bounding per-presenter bookkeeping.
+ */
+export const MAX_PRESENTERS_PER_ROOM = 2;
+
 export const TARGET_VIDEO_BITRATE_KBPS_DEFAULT = 6000;
 /**
  * Opus stereo. 96k is fine for speech but audibly lossy on music and game audio; 160k
