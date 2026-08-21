@@ -139,6 +139,15 @@ export type ControlMessage =
   /** Client -> server: watch this slot and stop receiving whatever it was watching.
    *  A viewer receives exactly one stream at a time no matter how many are live. */
   | { kind: "select-stream"; slot: number }
+  /**
+   * Plays an attention chime in a presenter's capture tab -- for reaching someone who is
+   * heads-down in a game with headphones on. Admin-only, same rule as ending a
+   * broadcast.
+   *
+   * With `slot` it's the admin asking; the server then relays it without one to that
+   * slot's presenter, mirroring how request-stop-presenting works.
+   */
+  | { kind: "play-alert"; slot?: number }
   | { kind: "viewer-count"; count: number }
   | { kind: "request-keyframe" }
   /**

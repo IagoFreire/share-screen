@@ -288,6 +288,19 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       return;
     }
 
+    // Admin-only, unconditionally: unlike stopping a broadcast there's no "your own"
+    // case that anyone may do, so this needs no slot comparison -- reject any request
+    // from a non-admin outright.
+    case "play-alert": {
+      if (!state.roomId || !isAdmin(state.userId) || message.slot === undefined) return;
+      const room = roomManager.getRoom(state.roomId);
+      if (!room) return;
+
+      const presenter = room.getPresenter(message.slot);
+      if (presenter) send(presenter.ws, { kind: "play-alert" });
+      return;
+    }
+
     case "request-keyframe": {
       if (!state.roomId) return;
       const room = roomManager.getRoom(state.roomId);

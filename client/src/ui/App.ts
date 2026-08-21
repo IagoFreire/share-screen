@@ -12,6 +12,7 @@ import { startAudioDecodePipeline, type AudioDecodePipeline } from "../playback/
 import { createMediaClock } from "../playback/mediaClock.js";
 import { getDiscordSdk } from "../discord/sdkBootstrap.js";
 import {
+  ICON_BELL,
   ICON_FULLSCREEN_ENTER,
   ICON_FULLSCREEN_EXIT,
   ICON_IDLE,
@@ -68,6 +69,7 @@ export function mountApp(options: MountAppOptions): void {
           <button id="share-btn" class="btn-share" type="button">${ICON_SHARE}<span>Compartilhar tela</span></button>
           <span id="status-text" class="status-text"></span>
           <div class="spacer"></div>
+          <button id="alert-btn" class="icon-btn" type="button" title="Tocar um alerta para quem está transmitindo" style="display: none">${ICON_BELL}</button>
           <button id="end-stream-btn" class="icon-btn is-danger" type="button" title="Encerrar esta transmissão" style="display: none">${ICON_END_STREAM}</button>
           <button id="video-toggle-btn" class="icon-btn" type="button" title="Desativar vídeo (somente áudio)">${ICON_VIDEO}</button>
           <div class="volume-group">
@@ -84,6 +86,7 @@ export function mountApp(options: MountAppOptions): void {
   const player = root.querySelector<HTMLDivElement>("#player")!;
   const shareButton = root.querySelector<HTMLButtonElement>("#share-btn")!;
   const statusText = root.querySelector<HTMLSpanElement>("#status-text")!;
+  const alertButton = root.querySelector<HTMLButtonElement>("#alert-btn")!;
   const endStreamButton = root.querySelector<HTMLButtonElement>("#end-stream-btn")!;
   const videoToggleButton = root.querySelector<HTMLButtonElement>("#video-toggle-btn")!;
   const muteButton = root.querySelector<HTMLButtonElement>("#mute-btn")!;
@@ -238,7 +241,9 @@ export function mountApp(options: MountAppOptions): void {
     // Admin-only: end whichever broadcast is being watched. Hidden for your own, since
     // the main share/stop button already covers that and two ways to do the same thing
     // in one bar is just noise.
-    endStreamButton.style.display = isAdmin && hasPresenter() && !watchingSelf ? "" : "none";
+    const canModerateStream = isAdmin && hasPresenter() && !watchingSelf;
+    alertButton.style.display = canModerateStream ? "" : "none";
+    endStreamButton.style.display = canModerateStream ? "" : "none";
 
     videoToggleButton.disabled = isPausedHere || !hasPresenter();
     videoToggleButton.innerHTML = videoDisabled ? ICON_VIDEO_OFF : ICON_VIDEO;
@@ -490,6 +495,19 @@ export function mountApp(options: MountAppOptions): void {
 
   resumeButton.addEventListener("click", () => {
     wsClient.sendControl({ kind: "resume-viewing" });
+  });
+
+  // Brief lockout after each chime: the sound lasts about half a second, and without
+  // this an impatient double-click stacks overlapping tones in the presenter's ears.
+  alertButton.addEventListener("click", () => {
+    const stream = currentStream();
+    if (!stream || alertButton.disabled) return;
+
+    wsClient.sendControl({ kind: "play-alert", slot: stream.slot });
+    alertButton.disabled = true;
+    setTimeout(() => {
+      alertButton.disabled = false;
+    }, 2000);
   });
 
   // Ends the broadcast on a single click, no confirmation step. Deliberately not

@@ -13,6 +13,7 @@ import { startVideoDecodePipeline, type VideoDecodePipeline } from "./playback/v
 import { startAudioDecodePipeline, type AudioDecodePipeline } from "./playback/audioDecodePipeline.js";
 import { createMediaClock } from "./playback/mediaClock.js";
 import {
+  ICON_BELL,
   ICON_END_STREAM,
   ICON_FULLSCREEN_ENTER,
   ICON_FULLSCREEN_EXIT,
@@ -68,6 +69,7 @@ function main(): void {
         <div class="overlay-bar">
           <span id="status-text" class="status-text"></span>
           <div class="spacer"></div>
+          <button id="alert-btn" class="icon-btn" type="button" title="Tocar um alerta para quem está transmitindo" style="display: none">${ICON_BELL}</button>
           <button id="end-stream-btn" class="icon-btn is-danger" type="button" title="Encerrar esta transmissão" style="display: none">${ICON_END_STREAM}</button>
           <button id="video-toggle-btn" class="icon-btn" type="button" title="Desativar vídeo (somente áudio)">${ICON_VIDEO}</button>
           <div class="volume-group">
@@ -82,6 +84,7 @@ function main(): void {
 
   const player = root.querySelector<HTMLDivElement>("#player")!;
   const statusText = root.querySelector<HTMLSpanElement>("#status-text")!;
+  const alertButton = root.querySelector<HTMLButtonElement>("#alert-btn")!;
   const endStreamButton = root.querySelector<HTMLButtonElement>("#end-stream-btn")!;
   const videoToggleButton = root.querySelector<HTMLButtonElement>("#video-toggle-btn")!;
   const muteButton = root.querySelector<HTMLButtonElement>("#mute-btn")!;
@@ -190,7 +193,9 @@ function main(): void {
     // showVideoOffSelfUi above. Only actually being paused (or no presenter) means
     // there's no pipeline to toggle.
     // Admin-only, and never for your own broadcast -- see App.ts.
-    endStreamButton.style.display = isAdmin && hasPresenter() && !isSelf() ? "" : "none";
+    const canModerateStream = isAdmin && hasPresenter() && !isSelf();
+    alertButton.style.display = canModerateStream ? "" : "none";
+    endStreamButton.style.display = canModerateStream ? "" : "none";
 
     videoToggleButton.disabled = isPausedHere || !hasPresenter();
     videoToggleButton.innerHTML = videoDisabled ? ICON_VIDEO_OFF : ICON_VIDEO;
@@ -384,6 +389,18 @@ function main(): void {
 
   resumeButton.addEventListener("click", () => {
     wsClient.sendControl({ kind: "resume-viewing" });
+  });
+
+  // Brief lockout after each chime -- see App.ts.
+  alertButton.addEventListener("click", () => {
+    const stream = currentStream();
+    if (!stream || alertButton.disabled) return;
+
+    wsClient.sendControl({ kind: "play-alert", slot: stream.slot });
+    alertButton.disabled = true;
+    setTimeout(() => {
+      alertButton.disabled = false;
+    }, 2000);
   });
 
   // Single click, no confirmation -- matches the Activity (see App.ts for why

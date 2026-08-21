@@ -9,6 +9,7 @@ export const ICON_FULLSCREEN_EXIT = `<svg viewBox="0 0 24 24" width="16" height=
 export const ICON_STOP = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>`;
 export const ICON_IDLE = `<svg viewBox="0 0 24 24" width="46" height="46" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg>`;
 export const ICON_OPEN_EXTERNAL = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7zM5 5h5V3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-5h-2v5H5V5z"/></svg>`;
+export const ICON_BELL = `<svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 0 0-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>`;
 // Power symbol: reads as "end this broadcast" without implying the viewer's own playback
 // stops, which a plain stop square sitting among the playback controls would.
 export const ICON_END_STREAM = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.8 6.8a8 8 0 1 0 10.4 0"/></svg>`;

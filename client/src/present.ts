@@ -118,6 +118,8 @@ function main(): void {
   let audioClock = 0;
   /** Frame slot assigned by the server when this tab started presenting. */
   let presenterSlot = SLOT_PRESENTER;
+  /** Lazily created on the first alert; see playAlertChime. */
+  let alertContext: AudioContext | null = null;
 
   // Restore the previous choice so a presenter who always uses, say, 720p30 doesn't
   // have to re-pick it every time the Activity opens this tab.
@@ -211,6 +213,10 @@ function main(): void {
         return;
       case "request-keyframe":
         videoEncodePipeline?.requestKeyframe();
+        return;
+      // A moderator is trying to get this presenter's attention.
+      case "play-alert":
+        playAlertChime();
         return;
       // The user pressed "Parar transmissão" inside the Discord Activity; the capture
       // lives in this tab, so the actual teardown has to happen here.
@@ -313,6 +319,44 @@ function main(): void {
     } catch (error) {
       console.error("Failed to start screen capture:", error);
       setStatus("Nao foi possivel iniciar a captura de tela.");
+    }
+  }
+
+  /**
+   * Two-note chime, synthesised rather than loaded from a file: no asset to ship, no
+   * request that could fail exactly when someone is trying to reach you, and nothing to
+   * cache-bust. Reuses one AudioContext because browsers cap how many a page may create.
+   *
+   * Autoplay policy isn't a concern here: this tab only ever reaches the presenting
+   * state through a click on "Compartilhar tela", so it always has user activation.
+   */
+  function playAlertChime(): void {
+    try {
+      alertContext ??= new AudioContext();
+      const ctx = alertContext;
+      void ctx.resume();
+
+      const startAt = ctx.currentTime;
+      // A perfect fourth, second note after the first -- reads as a doorbell rather
+      // than as an error tone.
+      for (const [index, frequency] of [880, 1174.7].entries()) {
+        const oscillator = ctx.createOscillator();
+        const gain = ctx.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.value = frequency;
+
+        const noteStart = startAt + index * 0.18;
+        // Ramp instead of a hard start/stop: an abrupt edge on a sine wave clicks.
+        gain.gain.setValueAtTime(0, noteStart);
+        gain.gain.linearRampToValueAtTime(0.25, noteStart + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, noteStart + 0.45);
+
+        oscillator.connect(gain).connect(ctx.destination);
+        oscillator.start(noteStart);
+        oscillator.stop(noteStart + 0.5);
+      }
+    } catch (error) {
+      console.error("Failed to play alert chime:", error);
     }
   }
 
