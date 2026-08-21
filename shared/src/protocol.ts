@@ -112,6 +112,10 @@ export type ControlMessage =
       /** Every broadcast currently live in the room; empty when nobody is presenting. */
       streams: StreamInfo[];
       viewerCount: number;
+      /** Whether this connection may end other people's broadcasts (ADMIN_USER_IDS).
+       *  Purely so the UI knows whether to offer the control -- the server re-checks
+       *  on every request and never trusts the client's word for it. */
+      isAdmin: boolean;
     }
   /** Sent by the presenter tab (present.html). `presenterId` is the Discord user id
    *  so the Activity can tell "someone is presenting" from "*I* am presenting". */
@@ -120,10 +124,15 @@ export type ControlMessage =
    *  frame it sends; the relay overwrites it anyway, but matching avoids confusion. */
   | { kind: "presenting-started"; slot: number }
   | { kind: "stop-presenting" }
-  /** Activity -> server -> presenter socket: asks the presenting tab to stop, so the
-   *  user can end their own broadcast from inside Discord instead of hunting for the
-   *  browser tab that is actually doing the capture. */
-  | { kind: "request-stop-presenting" }
+  /**
+   * Activity -> server -> presenter socket: asks a presenting tab to stop, so the user
+   * can end a broadcast from inside Discord instead of hunting for the browser tab that
+   * is actually doing the capture.
+   *
+   * `slot` targets someone else's broadcast and is honoured only for an admin; omitted,
+   * it means "end my own", which anyone may do.
+   */
+  | { kind: "request-stop-presenting"; slot?: number }
   /** Broadcast whenever a stream starts or stops, replacing the whole list so viewers
    *  never have to reconstruct it from deltas. */
   | { kind: "streams-changed"; streams: StreamInfo[] }

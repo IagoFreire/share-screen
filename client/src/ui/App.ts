@@ -17,6 +17,7 @@ import {
   ICON_IDLE,
   ICON_MUTED,
   ICON_OPEN_EXTERNAL,
+  ICON_END_STREAM,
   ICON_SHARE,
   ICON_STOP,
   ICON_VIDEO,
@@ -67,6 +68,7 @@ export function mountApp(options: MountAppOptions): void {
           <button id="share-btn" class="btn-share" type="button">${ICON_SHARE}<span>Compartilhar tela</span></button>
           <span id="status-text" class="status-text"></span>
           <div class="spacer"></div>
+          <button id="end-stream-btn" class="icon-btn is-danger" type="button" title="Encerrar esta transmissão" style="display: none">${ICON_END_STREAM}</button>
           <button id="video-toggle-btn" class="icon-btn" type="button" title="Desativar vídeo (somente áudio)">${ICON_VIDEO}</button>
           <div class="volume-group">
             <button id="mute-btn" class="icon-btn" type="button" title="Mudo">${ICON_VOLUME}</button>
@@ -82,6 +84,7 @@ export function mountApp(options: MountAppOptions): void {
   const player = root.querySelector<HTMLDivElement>("#player")!;
   const shareButton = root.querySelector<HTMLButtonElement>("#share-btn")!;
   const statusText = root.querySelector<HTMLSpanElement>("#status-text")!;
+  const endStreamButton = root.querySelector<HTMLButtonElement>("#end-stream-btn")!;
   const videoToggleButton = root.querySelector<HTMLButtonElement>("#video-toggle-btn")!;
   const muteButton = root.querySelector<HTMLButtonElement>("#mute-btn")!;
   const volumeSlider = root.querySelector<HTMLInputElement>("#volume-slider")!;
@@ -118,6 +121,9 @@ export function mountApp(options: MountAppOptions): void {
   /** True while this viewer chose to stop receiving video (audio-only, e.g. to listen
    *  along to music without watching). Purely a local preference sent to the server. */
   let videoDisabled = false;
+  /** Set by the server at join: may this user end other people's broadcasts? Only
+   *  decides whether the control is offered -- the server re-checks every request. */
+  let isAdmin = false;
   /**
    * Bumped by every call that decides what the video pipeline should be (join, resume,
    * toggle). `startVideoDecodePipeline()` is async (it awaits `isConfigSupported()`), so
@@ -229,6 +235,11 @@ export function mountApp(options: MountAppOptions): void {
     // showVideoOffSelfUi above) your Activity connection genuinely has a video pipeline
     // decoding your own broadcast, so the toggle stays live for it. Only actually being
     // paused (or having no presenter at all) means there's no pipeline to toggle.
+    // Admin-only: end whichever broadcast is being watched. Hidden for your own, since
+    // the main share/stop button already covers that and two ways to do the same thing
+    // in one bar is just noise.
+    endStreamButton.style.display = isAdmin && hasPresenter() && !watchingSelf ? "" : "none";
+
     videoToggleButton.disabled = isPausedHere || !hasPresenter();
     videoToggleButton.innerHTML = videoDisabled ? ICON_VIDEO_OFF : ICON_VIDEO;
     videoToggleButton.title = videoDisabled ? "Ativar vídeo" : "Desativar vídeo (somente áudio)";
@@ -308,6 +319,7 @@ export function mountApp(options: MountAppOptions): void {
         // was ever paused, permanently showing "Retomar aqui" over a feed that's
         // actually flowing fine.
         isPausedHere = false;
+        isAdmin = message.isAdmin;
         viewerCount = message.viewerCount;
         streams = message.streams;
         // The server picks the lowest live slot for a fresh connection; mirror that so
@@ -478,6 +490,15 @@ export function mountApp(options: MountAppOptions): void {
 
   resumeButton.addEventListener("click", () => {
     wsClient.sendControl({ kind: "resume-viewing" });
+  });
+
+  endStreamButton.addEventListener("click", () => {
+    const stream = currentStream();
+    if (!stream) return;
+    // Irreversible for the other person -- their capture stops and they have to set it
+    // up again -- so make sure it wasn't a misclick on an unlabelled icon.
+    if (!window.confirm("Encerrar a transmissão desta pessoa?")) return;
+    wsClient.sendControl({ kind: "request-stop-presenting", slot: stream.slot });
   });
 
   videoToggleButton.addEventListener("click", () => void toggleVideoDisabled());

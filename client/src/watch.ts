@@ -13,6 +13,7 @@ import { startVideoDecodePipeline, type VideoDecodePipeline } from "./playback/v
 import { startAudioDecodePipeline, type AudioDecodePipeline } from "./playback/audioDecodePipeline.js";
 import { createMediaClock } from "./playback/mediaClock.js";
 import {
+  ICON_END_STREAM,
   ICON_FULLSCREEN_ENTER,
   ICON_FULLSCREEN_EXIT,
   ICON_IDLE,
@@ -67,6 +68,7 @@ function main(): void {
         <div class="overlay-bar">
           <span id="status-text" class="status-text"></span>
           <div class="spacer"></div>
+          <button id="end-stream-btn" class="icon-btn is-danger" type="button" title="Encerrar esta transmissão" style="display: none">${ICON_END_STREAM}</button>
           <button id="video-toggle-btn" class="icon-btn" type="button" title="Desativar vídeo (somente áudio)">${ICON_VIDEO}</button>
           <div class="volume-group">
             <button id="mute-btn" class="icon-btn" type="button" title="Mudo">${ICON_VOLUME}</button>
@@ -80,6 +82,7 @@ function main(): void {
 
   const player = root.querySelector<HTMLDivElement>("#player")!;
   const statusText = root.querySelector<HTMLSpanElement>("#status-text")!;
+  const endStreamButton = root.querySelector<HTMLButtonElement>("#end-stream-btn")!;
   const videoToggleButton = root.querySelector<HTMLButtonElement>("#video-toggle-btn")!;
   const muteButton = root.querySelector<HTMLButtonElement>("#mute-btn")!;
   const volumeSlider = root.querySelector<HTMLInputElement>("#volume-slider")!;
@@ -114,6 +117,8 @@ function main(): void {
   /** True while this viewer chose to stop receiving video (audio-only, e.g. to listen
    *  along to music without watching). Purely a local preference sent to the server. */
   let videoDisabled = false;
+  /** Set by the server at join: may this user end other people's broadcasts? */
+  let isAdmin = false;
   /**
    * Bumped by every call that decides what the video pipeline should be (join, resume,
    * toggle). `startVideoDecodePipeline()` is async (it awaits `isConfigSupported()`), so
@@ -184,6 +189,9 @@ function main(): void {
     // Unlike audio, video isn't blocked while watching your own broadcast -- see
     // showVideoOffSelfUi above. Only actually being paused (or no presenter) means
     // there's no pipeline to toggle.
+    // Admin-only, and never for your own broadcast -- see App.ts.
+    endStreamButton.style.display = isAdmin && hasPresenter() && !isSelf() ? "" : "none";
+
     videoToggleButton.disabled = isPausedHere || !hasPresenter();
     videoToggleButton.innerHTML = videoDisabled ? ICON_VIDEO_OFF : ICON_VIDEO;
     videoToggleButton.title = videoDisabled ? "Ativar vídeo" : "Desativar vídeo (somente áudio)";
@@ -295,6 +303,7 @@ function main(): void {
         // flag from before the reconnect must be cleared here, or the UI gets stuck
         // showing "Retomar aqui" forever over a feed that's actually flowing fine.
         isPausedHere = false;
+        isAdmin = message.isAdmin;
         viewerCount = message.viewerCount;
         streams = message.streams;
         // Mirror the server's choice of default slot for a fresh connection.
@@ -375,6 +384,13 @@ function main(): void {
 
   resumeButton.addEventListener("click", () => {
     wsClient.sendControl({ kind: "resume-viewing" });
+  });
+
+  endStreamButton.addEventListener("click", () => {
+    const stream = currentStream();
+    if (!stream) return;
+    if (!window.confirm("Encerrar a transmissão desta pessoa?")) return;
+    wsClient.sendControl({ kind: "request-stop-presenting", slot: stream.slot });
   });
 
   videoToggleButton.addEventListener("click", () => void toggleVideoDisabled());

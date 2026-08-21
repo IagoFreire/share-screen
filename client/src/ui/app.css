@@ -467,6 +467,19 @@ body.viewer .status {
   transform: translateY(0);
 }
 
+/* Destructive action (ending someone else's broadcast): tinted red at rest so it reads
+   as different from the neighbouring playback controls before it's even hovered. */
+.icon-btn.is-danger {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.icon-btn.is-danger:hover {
+  background: rgba(248, 113, 113, 0.28);
+  color: #fff;
+}
+
 .icon-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;

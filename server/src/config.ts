@@ -21,6 +21,14 @@ function requireEnv(name: string): string {
   return value;
 }
 
+/** Comma-separated env value -> trimmed entries, ignoring blanks and stray whitespace. */
+function listEnv(name: string): string[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
 function intEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -41,6 +49,14 @@ export const config = {
   targetVideoBitrateKbps: intEnv("TARGET_VIDEO_BITRATE_KBPS", TARGET_VIDEO_BITRATE_KBPS_DEFAULT),
   maxConcurrentRooms: intEnv("MAX_CONCURRENT_ROOMS", MAX_CONCURRENT_ROOMS_DEFAULT),
   maxViewersPerRoom: intEnv("MAX_VIEWERS_PER_ROOM", MAX_VIEWERS_PER_ROOM_DEFAULT),
+
+  /**
+   * Discord user ids allowed to end anyone's broadcast, not just their own.
+   *
+   * Kept in the environment rather than the source so moderators can change without a
+   * rebuild and redeploy, and so the list never lands in the repository.
+   */
+  adminUserIds: listEnv("ADMIN_USER_IDS"),
 };
 
 export function assertDiscordOAuthConfigured(): void {

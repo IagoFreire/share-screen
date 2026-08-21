@@ -9,6 +9,7 @@ import {
   type ControlMessage,
 } from "@screenshare-bot/shared";
 import { roomManager } from "../roomManager.js";
+import { config } from "../config.js";
 import type { Room } from "./room.js";
 import { sendOrDrop, clearBackpressureState } from "./backpressure.js";
 import { isUserInVoiceChannel } from "../auth/verifyMember.js";
@@ -65,6 +66,11 @@ function getState(ws: WebSocket): ConnectionState {
     connectionState.set(ws, state);
   }
   return state;
+}
+
+/** Whether this user may end broadcasts other than their own (see config.adminUserIds). */
+function isAdmin(userId: string | null): boolean {
+  return userId !== null && config.adminUserIds.includes(userId);
 }
 
 function send(ws: WebSocket, message: ControlMessage): void {
@@ -205,6 +211,7 @@ async function handleJoin(
     roomId: message.roomId,
     streams,
     viewerCount: room.viewerCount,
+    isAdmin: isAdmin(message.userId),
   });
 }
 
@@ -249,15 +256,19 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
     }
 
     // Forwarded to the presenting tab, which owns the capture and actually stops it.
-    // Gated on the requester owning that broadcast, so one viewer can't cut off someone
-    // else's stream.
+    // Without an explicit slot this ends the requester's own broadcast; with one it
+    // ends somebody else's, which only an admin may do. Re-checked here rather than
+    // trusting the `isAdmin` the client was told at join time.
     case "request-stop-presenting": {
       if (!state.roomId || !state.userId) return;
       const room = roomManager.getRoom(state.roomId);
       if (!room) return;
 
-      const slot = room.slotOfUser(state.userId);
-      if (slot === null) return;
+      const targetsOther = message.slot !== undefined && message.slot !== room.slotOfUser(state.userId);
+      if (targetsOther && !isAdmin(state.userId)) return;
+
+      const slot = message.slot ?? room.slotOfUser(state.userId);
+      if (slot === null || slot === undefined) return;
       const presenter = room.getPresenter(slot);
       if (presenter) send(presenter.ws, { kind: "request-stop-presenting" });
       return;
