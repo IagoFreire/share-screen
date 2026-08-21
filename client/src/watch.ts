@@ -386,10 +386,11 @@ function main(): void {
     wsClient.sendControl({ kind: "resume-viewing" });
   });
 
+  // Single click, no confirmation -- matches the Activity (see App.ts for why
+  // window.confirm() can't be used there).
   endStreamButton.addEventListener("click", () => {
     const stream = currentStream();
     if (!stream) return;
-    if (!window.confirm("Encerrar a transmissão desta pessoa?")) return;
     wsClient.sendControl({ kind: "request-stop-presenting", slot: stream.slot });
   });
 

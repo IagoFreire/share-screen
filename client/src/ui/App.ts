@@ -492,12 +492,13 @@ export function mountApp(options: MountAppOptions): void {
     wsClient.sendControl({ kind: "resume-viewing" });
   });
 
+  // Ends the broadcast on a single click, no confirmation step. Deliberately not
+  // window.confirm(): Discord's Activity iframe is sandboxed without allow-modals, so
+  // confirm() never shows a dialog and simply returns false -- gating the action on it
+  // is what made this button silently do nothing at all.
   endStreamButton.addEventListener("click", () => {
     const stream = currentStream();
     if (!stream) return;
-    // Irreversible for the other person -- their capture stops and they have to set it
-    // up again -- so make sure it wasn't a misclick on an unlabelled icon.
-    if (!window.confirm("Encerrar a transmissão desta pessoa?")) return;
     wsClient.sendControl({ kind: "request-stop-presenting", slot: stream.slot });
   });
 
