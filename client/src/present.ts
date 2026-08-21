@@ -1,6 +1,10 @@
 // See main.ts: the stylesheet is imported from JS so Discord's proxy can't pin a
 // stale copy of a never-changing stylesheet URL.
 import "./ui/app.css";
+// Imported rather than referenced by path from public/: Vite fingerprints the emitted
+// filename, so a changed sound can never be masked by Discord's proxy serving a cached
+// copy of a stable URL -- the same trap that bit the stylesheet earlier in this project.
+import doorKnockUrl from "../assets/DoorKnock.mp3";
 import {
   buildQualityPreset,
   FrameType,
@@ -119,7 +123,7 @@ function main(): void {
   /** Frame slot assigned by the server when this tab started presenting. */
   let presenterSlot = SLOT_PRESENTER;
   /** Lazily created on the first alert; see playAlertChime. */
-  let alertContext: AudioContext | null = null;
+  let alertAudio: HTMLAudioElement | null = null;
 
   // Restore the previous choice so a presenter who always uses, say, 720p30 doesn't
   // have to re-pick it every time the Activity opens this tab.
@@ -323,41 +327,19 @@ function main(): void {
   }
 
   /**
-   * Two-note chime, synthesised rather than loaded from a file: no asset to ship, no
-   * request that could fail exactly when someone is trying to reach you, and nothing to
-   * cache-bust. Reuses one AudioContext because browsers cap how many a page may create.
+   * Plays the knock sound for a moderator trying to get this presenter's attention.
+   *
+   * One element, reused and rewound, rather than a new Audio() per alert: that keeps
+   * the file decoded and ready so the sound fires immediately, and stops repeated
+   * alerts from layering on top of each other.
    *
    * Autoplay policy isn't a concern here: this tab only ever reaches the presenting
    * state through a click on "Compartilhar tela", so it always has user activation.
    */
   function playAlertChime(): void {
-    try {
-      alertContext ??= new AudioContext();
-      const ctx = alertContext;
-      void ctx.resume();
-
-      const startAt = ctx.currentTime;
-      // A perfect fourth, second note after the first -- reads as a doorbell rather
-      // than as an error tone.
-      for (const [index, frequency] of [880, 1174.7].entries()) {
-        const oscillator = ctx.createOscillator();
-        const gain = ctx.createGain();
-        oscillator.type = "sine";
-        oscillator.frequency.value = frequency;
-
-        const noteStart = startAt + index * 0.18;
-        // Ramp instead of a hard start/stop: an abrupt edge on a sine wave clicks.
-        gain.gain.setValueAtTime(0, noteStart);
-        gain.gain.linearRampToValueAtTime(0.25, noteStart + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.001, noteStart + 0.45);
-
-        oscillator.connect(gain).connect(ctx.destination);
-        oscillator.start(noteStart);
-        oscillator.stop(noteStart + 0.5);
-      }
-    } catch (error) {
-      console.error("Failed to play alert chime:", error);
-    }
+    alertAudio ??= new Audio(doorKnockUrl);
+    alertAudio.currentTime = 0;
+    alertAudio.play().catch((error) => console.error("Failed to play alert sound:", error));
   }
 
   function stopPresenting(): void {
