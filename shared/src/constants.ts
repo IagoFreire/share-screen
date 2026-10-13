@@ -7,10 +7,10 @@ export const MAX_VIEWERS_PER_ROOM_DEFAULT = 10;
  * Cheaper than it sounds: viewers watch one stream at a time, so egress stays
  * "viewers x bitrate" no matter how many are live. What scales with this number is
  * *ingress* (one upload per presenter), which doesn't count against the instance's
- * outbound allowance. The cap is really about keeping the picker UI legible and
- * bounding per-presenter bookkeeping.
+ * outbound allowance. The cap is really about keeping the broadcast list short and
+ * bounding per-presenter bookkeeping (slots are a 1-byte field, so far below its limit).
  */
-export const MAX_PRESENTERS_PER_ROOM = 2;
+export const MAX_PRESENTERS_PER_ROOM = 5;
 
 export const TARGET_VIDEO_BITRATE_KBPS_DEFAULT = 6000;
 /**
@@ -134,6 +134,17 @@ export const AUDIO_CONTINUITY_TOLERANCE_SECONDS = 0.005;
 export const VIDEO_JITTER_BUFFER_SECONDS = 0.3;
 
 /**
+ * When video is self-clocked (no audio to follow), how far the newest decoded frame may
+ * run ahead of what is on screen before playback skips forward to live.
+ *
+ * Without a ceiling the self-clock only ever plays the queue out at real time, so any
+ * backlog -- rendering throttled behind another window, a burst after the network was
+ * suspended -- becomes a permanent delay instead of being caught up. Must sit above the
+ * jitter buffer itself, or normal playback would trip it.
+ */
+export const VIDEO_MAX_LAG_SECONDS = VIDEO_JITTER_BUFFER_SECONDS + 0.2;
+
+/**
  * How far outside the buffered range of video timestamps the audio clock may sit before
  * video stops trusting it and self-clocks instead. Audio and video timestamps come off
  * the same capture clock, so in practice the difference is milliseconds; this only
@@ -180,3 +191,31 @@ export const KEYFRAME_INTERVAL_MS = 10_000;
  * added latency, which is not perceptible here, while a dropped frame very much is.
  */
 export const ENCODER_QUEUE_DROP_THRESHOLD = 4;
+
+/**
+ * How long a viewer waits for the first frame to actually appear over a direct WebRTC
+ * connection before giving up and staying on the relay.
+ *
+ * Generous on purpose: on a healthy network this closes in well under a second, and
+ * waiting costs nothing because the relay was never switched off -- the viewer is
+ * watching the whole time. Too short and connections that were merely slow to gather
+ * candidates get abandoned for no reason.
+ */
+export const RTC_FIRST_FRAME_DEADLINE_MS = 8_000;
+
+/**
+ * Jitter buffer the viewer asks the browser for on a direct WebRTC connection (ms).
+ * null leaves the browser's adaptive default alone. 0 asks for the smallest buffer it
+ * will run, which cut delay but made a friend's stream stutter, so it is not used.
+ */
+export const RTC_JITTER_BUFFER_TARGET_MS: number | null = null;
+
+/**
+ * Public STUN, used when the deployment configures no TURN of its own.
+ *
+ * STUN only tells a peer its own public address, which is enough to traverse most home
+ * NATs. It does nothing for symmetric NAT or CGNAT -- those need a TURN server, which
+ * actually forwards the video and therefore costs real bandwidth. That's a hosting
+ * decision, so it comes from the environment (see /api/ice) rather than being baked in.
+ */
+export const DEFAULT_STUN_URL = "stun:stun.l.google.com:19302";

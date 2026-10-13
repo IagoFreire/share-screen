@@ -57,6 +57,21 @@ export const config = {
    * rebuild and redeploy, and so the list never lands in the repository.
    */
   adminUserIds: listEnv("ADMIN_USER_IDS"),
+
+  /**
+   * Optional TURN relay, served to clients from /api/ice.
+   *
+   * STUN alone (the built-in default) gets a direct connection through most home NATs
+   * but not symmetric NAT or CGNAT. TURN covers those by forwarding the media itself,
+   * which means it costs real bandwidth -- so whether one exists is a hosting decision,
+   * not a default. Viewers it can't help simply stay on the WebSocket relay.
+   *
+   * Kept in the environment because TURN credentials are usually short-lived and must
+   * never be baked into the client bundle.
+   */
+  turnUrl: process.env.TURN_URL ?? "",
+  turnUsername: process.env.TURN_USERNAME ?? "",
+  turnPassword: process.env.TURN_PASSWORD ?? "",
 };
 
 export function assertDiscordOAuthConfigured(): void {

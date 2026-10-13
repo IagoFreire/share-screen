@@ -5,10 +5,10 @@ name: Deploy
 # and take minutes -- so the instance never builds anything. It only installs runtime
 # dependencies (express/ws/dotenv, all small) and runs node.
 
+# Automatic deploy on push is disabled: the bot now runs locally behind a Cloudflare
+# Tunnel (see docs/DEPLOY.md section 0). Re-add `push: branches: [main]` to bring it back.
 on:
-  push:
-    branches: [main]
-  workflow_dispatch: # lets you re-deploy from the Actions tab without a new commit
+  workflow_dispatch: # manual deploy from the Actions tab
 
 # Never let two deploys interleave rsync + restart on the same box.
 concurrency:

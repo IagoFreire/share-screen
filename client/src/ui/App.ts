@@ -1,6 +1,7 @@
 import {
   FrameType,
   MAX_PRESENTERS_PER_ROOM,
+  type ActiveBroadcast,
   type AudioParams,
   type ControlMessage,
   type EncodedFrame,
@@ -10,12 +11,14 @@ import { WsClient } from "../net/wsClient.js";
 import { startVideoDecodePipeline, type VideoDecodePipeline } from "../playback/videoDecodePipeline.js";
 import { startAudioDecodePipeline, type AudioDecodePipeline } from "../playback/audioDecodePipeline.js";
 import { createMediaClock } from "../playback/mediaClock.js";
+import { createRtcViewer } from "../playback/rtcViewer.js";
 import { getDiscordSdk } from "../discord/sdkBootstrap.js";
 import {
   ICON_BELL,
   ICON_FULLSCREEN_ENTER,
   ICON_FULLSCREEN_EXIT,
   ICON_IDLE,
+  ICON_LIST,
   ICON_MUTED,
   ICON_OPEN_EXTERNAL,
   ICON_END_STREAM,
@@ -25,6 +28,7 @@ import {
   ICON_VIDEO_OFF,
   ICON_VOLUME,
 } from "./icons.js";
+import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } from "./broadcastsPanel.js";
 
 export interface MountAppOptions {
   roomId: string;
@@ -45,7 +49,17 @@ export interface MountAppOptions {
  * discordSdk.commands.openExternalLink()), where capture/encode actually runs.
  */
 export function mountApp(options: MountAppOptions): void {
-  const { roomId, wsUrl, userId, guildId, setStatus: setPageStatus } = options;
+  const { wsUrl, userId, setStatus: setPageStatus } = options;
+  /**
+   * The room being watched. Starts as the voice channel that launched the Activity, but
+   * an admin can hop to any room on the relay from the active-broadcast list, so this
+   * isn't fixed for the session. Everything that addresses "the current room" -- joins,
+   * the present/watch tab URLs -- reads these rather than the options.
+   */
+  let roomId = options.roomId;
+  let guildId = options.guildId;
+  /** Slot to select once a hop's "joined" lands; see openBroadcast. */
+  let pendingSlot: number | null = null;
 
   const root = document.querySelector<HTMLDivElement>("#app");
   if (!root) throw new Error("#app root element not found.");
@@ -57,7 +71,8 @@ export function mountApp(options: MountAppOptions): void {
   root.innerHTML = `
     <div class="player" id="player">
       <canvas id="viewer-canvas"></canvas>
-      <div class="stream-picker" id="stream-picker" role="tablist" aria-label="Escolher transmissão"></div>
+      <video id="viewer-video" playsinline></video>
+      ${BROADCASTS_PANEL_HTML}
       <div class="idle-screen" id="idle-screen">
         <div class="idle-icon">${ICON_IDLE}</div>
         <p class="idle-title" id="idle-title">Ninguém está transmitindo</p>
@@ -69,6 +84,7 @@ export function mountApp(options: MountAppOptions): void {
           <button id="share-btn" class="btn-share" type="button">${ICON_SHARE}<span>Compartilhar tela</span></button>
           <span id="status-text" class="status-text"></span>
           <div class="spacer"></div>
+          <button id="broadcasts-btn" class="icon-btn" type="button" title="Transmissões ativas" style="display: none">${ICON_LIST}</button>
           <button id="alert-btn" class="icon-btn" type="button" title="Tocar um alerta para quem está transmitindo" style="display: none">${ICON_BELL}</button>
           <button id="end-stream-btn" class="icon-btn is-danger" type="button" title="Encerrar esta transmissão" style="display: none">${ICON_END_STREAM}</button>
           <button id="video-toggle-btn" class="icon-btn" type="button" title="Desativar vídeo (somente áudio)">${ICON_VIDEO}</button>
@@ -86,6 +102,7 @@ export function mountApp(options: MountAppOptions): void {
   const player = root.querySelector<HTMLDivElement>("#player")!;
   const shareButton = root.querySelector<HTMLButtonElement>("#share-btn")!;
   const statusText = root.querySelector<HTMLSpanElement>("#status-text")!;
+  const broadcastsButton = root.querySelector<HTMLButtonElement>("#broadcasts-btn")!;
   const alertButton = root.querySelector<HTMLButtonElement>("#alert-btn")!;
   const endStreamButton = root.querySelector<HTMLButtonElement>("#end-stream-btn")!;
   const videoToggleButton = root.querySelector<HTMLButtonElement>("#video-toggle-btn")!;
@@ -94,11 +111,22 @@ export function mountApp(options: MountAppOptions): void {
   const watchExternalButton = root.querySelector<HTMLButtonElement>("#watch-external-btn")!;
   const fullscreenButton = root.querySelector<HTMLButtonElement>("#fullscreen-btn")!;
   const canvas = root.querySelector<HTMLCanvasElement>("#viewer-canvas")!;
+  const rtcVideo = root.querySelector<HTMLVideoElement>("#viewer-video")!;
   const idleScreen = root.querySelector<HTMLDivElement>("#idle-screen")!;
   const idleTitle = root.querySelector<HTMLParagraphElement>("#idle-title")!;
   const idleSubtitle = root.querySelector<HTMLParagraphElement>("#idle-subtitle")!;
   const resumeButton = root.querySelector<HTMLButtonElement>("#resume-btn")!;
-  const streamPicker = root.querySelector<HTMLDivElement>("#stream-picker")!;
+
+  // Everything it reads is looked up lazily, so it can be built before the state and
+  // the socket it refers to are declared below.
+  const broadcastsPanel = createBroadcastsPanel({
+    panel: root.querySelector<HTMLDivElement>("#broadcasts-panel")!,
+    context: () => ({ roomId, selectedSlot, isAdmin, userId }),
+    requestList: () => wsClient.sendControl({ kind: "request-active-broadcasts" }),
+    onPick: (broadcast) => void openBroadcast(broadcast),
+    onOpenChange: () => render(),
+  });
+  broadcastsButton.addEventListener("click", () => broadcastsPanel.toggle());
 
   // Shared between the two decode pipelines so video plays against audio's clock rather
   // than its own -- see playback/mediaClock.ts. Outlives both, since they're torn down
@@ -127,6 +155,7 @@ export function mountApp(options: MountAppOptions): void {
   /** Set by the server at join: may this user end other people's broadcasts? Only
    *  decides whether the control is offered -- the server re-checks every request. */
   let isAdmin = false;
+  /** Whether the admin's cross-server broadcast list is open, and its polling timer. */
   /**
    * Bumped by every call that decides what the video pipeline should be (join, resume,
    * toggle). `startVideoDecodePipeline()` is async (it awaits `isConfigSupported()`), so
@@ -136,6 +165,38 @@ export function mountApp(options: MountAppOptions): void {
    * assigning it, or that decoder and its render loop would leak forever.
    */
   let videoPipelineGeneration = 0;
+
+  /**
+   * Direct connection to the presenter, attempted alongside the relay and used only
+   * once it actually paints (see playback/rtcViewer.ts). Everything above stays exactly
+   * as it was until then, and comes straight back if the direct connection falls over.
+   */
+  const rtcViewer = createRtcViewer({
+    video: rtcVideo,
+    sendSignal: (slot, payload) => wsClient.sendControl({ kind: "rtc-signal", slot, payload }),
+    sendActive: (slot, active) => wsClient.sendControl({ kind: "rtc-active", slot, active }),
+    onTransportChange: (viaRtc) => {
+      player.classList.toggle("is-direct", viaRtc);
+      if (viaRtc) {
+        // The relay has stopped sending this stream, so the WebCodecs decoders would
+        // only sit there holding memory. Audio rides the same peer connection as the
+        // video and is played by the element itself, so its pipeline goes too.
+        teardownVideoPipeline();
+        clearCanvas();
+        audioDecodePipeline?.stop();
+        audioDecodePipeline = null;
+        currentAudioParams = null;
+      } else {
+        // Back on the relay with cold decoders. The server has already asked the
+        // presenter for a keyframe, but ask again: this path is also reached when the
+        // peer dies before the server hears about it.
+        void ensureVideoPipeline();
+        ensureAudioPipeline(lastAudioParams);
+        if (hasPresenter()) wsClient.sendControl({ kind: "request-keyframe" });
+      }
+      render();
+    },
+  });
 
   /** The broadcast currently being received, if it's still live. */
   const currentStream = (): StreamInfo | undefined => streams.find((s) => s.slot === selectedSlot);
@@ -177,8 +238,6 @@ export function mountApp(options: MountAppOptions): void {
     } else {
       statusText.textContent = `${viewerCount} pessoa(s) na sala.`;
     }
-
-    renderStreamPicker();
 
     // Being paused only matters visibly once there's actually a broadcast it's saving
     // bandwidth on -- with no presenter nothing was going to be sent either way, so
@@ -241,6 +300,14 @@ export function mountApp(options: MountAppOptions): void {
     // Admin-only: end whichever broadcast is being watched. Hidden for your own, since
     // the main share/stop button already covers that and two ways to do the same thing
     // in one bar is just noise.
+    // The broadcast list is how everyone picks what to watch (see broadcastsPanel.ts).
+    const showBroadcastsButton = syncBroadcastsButton(broadcastsButton, {
+      isAdmin,
+      streamCount: streams.length,
+      isOpen: broadcastsPanel.isOpen,
+    });
+    if (!showBroadcastsButton) broadcastsPanel.close();
+
     const canModerateStream = isAdmin && hasPresenter() && !watchingSelf;
     alertButton.style.display = canModerateStream ? "" : "none";
     endStreamButton.style.display = canModerateStream ? "" : "none";
@@ -251,39 +318,6 @@ export function mountApp(options: MountAppOptions): void {
   }
 
   /**
-   * Tabs for picking which broadcast to watch. Hidden entirely with fewer than two, so
-   * the common single-broadcast case looks exactly as it did before this existed.
-   */
-  function renderStreamPicker(): void {
-    if (streams.length < 2) {
-      streamPicker.style.display = "none";
-      streamPicker.replaceChildren();
-      return;
-    }
-    streamPicker.style.display = "";
-
-    streamPicker.replaceChildren(
-      ...streams.map((stream, index) => {
-        const tab = document.createElement("button");
-        tab.type = "button";
-        tab.className = "stream-tab";
-        tab.setAttribute("role", "tab");
-        const isSelected = stream.slot === selectedSlot;
-        tab.classList.toggle("is-active", isSelected);
-        tab.setAttribute("aria-selected", String(isSelected));
-        // No display names available here -- the Activity only ever learns user ids --
-        // so identify the broadcaster by position, with "você" for your own.
-        tab.textContent =
-          stream.presenterId !== null && stream.presenterId === userId
-            ? "Sua transmissão"
-            : `Transmissão ${index + 1}`;
-        tab.addEventListener("click", () => void selectStream(stream.slot));
-        return tab;
-      }),
-    );
-  }
-
-  /**
    * Switches which broadcast is received. The server stops sending the old one the
    * moment it processes this, so the decoders have to be rebuilt: the new stream's
    * video decoder starts cold (needs a keyframe) and its audio may well have different
@@ -291,6 +325,10 @@ export function mountApp(options: MountAppOptions): void {
    */
   async function selectStream(slot: number): Promise<void> {
     if (slot === selectedSlot) return;
+    // The direct connection was negotiated around the old broadcast's tracks. Dropped
+    // before the switch is announced so the player is back on the canvas by the time
+    // the server starts feeding the new stream.
+    rtcViewer.reset();
     selectedSlot = slot;
     wsClient.sendControl({ kind: "select-stream", slot });
 
@@ -328,8 +366,18 @@ export function mountApp(options: MountAppOptions): void {
         viewerCount = message.viewerCount;
         streams = message.streams;
         // The server picks the lowest live slot for a fresh connection; mirror that so
-        // the client doesn't ask for a stream it isn't actually being sent.
+        // the client doesn't ask for a stream it isn't actually being sent. A pending
+        // slot from the broadcast list overrides it, since the point of that click was
+        // one specific broadcast rather than whichever happens to be first.
         selectedSlot = streams[0]?.slot ?? 0;
+        if (pendingSlot !== null) {
+          const wanted = streams.find((s) => s.slot === pendingSlot);
+          if (wanted) {
+            selectedSlot = wanted.slot;
+            wsClient.sendControl({ kind: "select-stream", slot: wanted.slot });
+          }
+          pendingSlot = null;
+        }
         lastAudioParams = audioParamsForSelection();
         render();
         setPageStatus("");
@@ -346,14 +394,26 @@ export function mountApp(options: MountAppOptions): void {
         render();
         return;
 
+      case "active-broadcasts":
+        broadcastsPanel.show(message.broadcasts);
+        return;
+
       case "streams-changed": {
         streams = message.streams;
         // The stream being watched may have just ended. The server already moved this
         // connection to a surviving slot (see handleSlotWentAway), so follow it rather
         // than sitting on a slot that no longer exists and receiving nothing.
-        if (!currentStream()) selectedSlot = streams[0]?.slot ?? selectedSlot;
+        if (!currentStream()) {
+          // Its presenter is gone, so any direct connection to it is dead too -- drop
+          // it now rather than waiting for the peer to notice on its own.
+          rtcViewer.reset();
+          selectedSlot = streams[0]?.slot ?? selectedSlot;
+        }
         lastAudioParams = audioParamsForSelection();
         render();
+        // A broadcast started or ended here: refresh an open list now rather than on the
+        // next poll, so it never offers one that's already gone.
+        broadcastsPanel.refresh();
         if (!isPausedHere) {
           ensureAudioPipeline(lastAudioParams);
           if (hasPresenter()) {
@@ -371,6 +431,7 @@ export function mountApp(options: MountAppOptions): void {
       // stream -- tear down our own pipelines so it isn't sent to us twice.
       case "viewing-paused":
         isPausedHere = true;
+        rtcViewer.reset();
         teardownVideoPipeline();
         audioDecodePipeline?.stop();
         audioDecodePipeline = null;
@@ -384,6 +445,12 @@ export function mountApp(options: MountAppOptions): void {
         void ensureVideoPipeline();
         ensureAudioPipeline(lastAudioParams);
         if (hasPresenter()) wsClient.sendControl({ kind: "request-keyframe" });
+        return;
+
+      // Signalling for the direct connection. Nothing visible happens until it
+      // actually delivers a frame -- see playback/rtcViewer.ts.
+      case "rtc-signal":
+        if (message.slot !== undefined) rtcViewer.handleSignal(message.slot, message.payload);
         return;
 
       case "room-full":
@@ -497,13 +564,47 @@ export function mountApp(options: MountAppOptions): void {
     wsClient.sendControl({ kind: "resume-viewing" });
   });
 
-  // Brief lockout after each chime: the sound lasts about half a second, and without
-  // this an impatient double-click stacks overlapping tones in the presenter's ears.
+  /**
+   * Opens a broadcast from the list, hopping rooms when it lives elsewhere.
+   *
+   * A different room means re-joining on this same socket: the server drops us from the
+   * old room (so its frames stop) and admits us to the new one without the usual
+   * voice-channel membership check. The slot can only be selected once that join lands
+   * and the stream list for the new room arrives, hence pendingSlot.
+   */
+  async function openBroadcast(broadcast: ActiveBroadcast): Promise<void> {
+    if (broadcast.roomId === roomId) {
+      await selectStream(broadcast.slot);
+      return;
+    }
+
+    roomId = broadcast.roomId;
+    guildId = broadcast.guildId;
+    pendingSlot = broadcast.slot;
+
+    // Nothing from the previous room should linger on screen while the new one loads --
+    // including a direct connection to its presenter, which would keep painting the old
+    // broadcast over the new room.
+    rtcViewer.reset();
+    teardownVideoPipeline();
+    audioDecodePipeline?.stop();
+    audioDecodePipeline = null;
+    currentAudioParams = null;
+    clearCanvas();
+    streams = [];
+    render();
+    setPageStatus("Entrando na transmissão...");
+
+    wsClient.sendControl({ kind: "join", roomId, userId, guildId });
+  }
+
   alertButton.addEventListener("click", () => {
     const stream = currentStream();
     if (!stream || alertButton.disabled) return;
 
     wsClient.sendControl({ kind: "play-alert", slot: stream.slot });
+    // Brief lockout after each chime: the sound lasts about half a second, and without
+    // this an impatient double-click stacks overlapping tones in the presenter's ears.
     alertButton.disabled = true;
     setTimeout(() => {
       alertButton.disabled = false;
@@ -527,6 +628,10 @@ export function mountApp(options: MountAppOptions): void {
     wsClient.sendControl({ kind: "set-video-enabled", enabled: !videoDisabled });
     render();
     if (videoDisabled) {
+      // A peer connection carries the whole broadcast or none of it, so staying on one
+      // would make "audio only" save nothing. Back to the relay, where the server can
+      // actually withhold the video.
+      rtcViewer.reset();
       teardownVideoPipeline();
       clearCanvas();
     } else {
@@ -553,10 +658,13 @@ export function mountApp(options: MountAppOptions): void {
   }
 
   // --- Volume / mute ---
+  // Applied to both paths unconditionally: whichever one isn't carrying the audio
+  // right now still has to be at the right level for the moment it takes over.
   volumeSlider.addEventListener("input", () => {
     const volume = Number(volumeSlider.value) / 100;
     volumeSlider.style.setProperty("--fill", `${volumeSlider.value}%`);
     audioDecodePipeline?.setVolume(volume);
+    rtcViewer.setVolume(volume);
     muteButton.innerHTML = volume === 0 ? ICON_MUTED : ICON_VOLUME;
     if (volume > 0) lastVolumeBeforeMute = volume;
   });
@@ -567,6 +675,7 @@ export function mountApp(options: MountAppOptions): void {
     volumeSlider.value = String(Math.round(nextVolume * 100));
     volumeSlider.style.setProperty("--fill", `${volumeSlider.value}%`);
     audioDecodePipeline?.setVolume(nextVolume);
+    rtcViewer.setVolume(nextVolume);
     muteButton.innerHTML = nextVolume === 0 ? ICON_MUTED : ICON_VOLUME;
   });
 
@@ -586,7 +695,11 @@ export function mountApp(options: MountAppOptions): void {
   });
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && isPseudoFullscreen) fullscreenButton.click();
+    if (event.key !== "Escape") return;
+    // The panel takes precedence: it's the innermost thing open, so Escape should
+    // dismiss it before leaving fullscreen.
+    if (broadcastsPanel.isOpen) broadcastsPanel.close();
+    else if (isPseudoFullscreen) fullscreenButton.click();
   });
 
   // Browsers keep receiving/decoding video in a backgrounded tab while throttling

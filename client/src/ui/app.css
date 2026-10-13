@@ -130,6 +130,34 @@ body.viewer .status {
   color: #f2f3f5;
 }
 
+/* Opt-in for broadcasting the system audio mix; sits directly under the tip that
+   explains why it is off by default (see capture/screenCapture.ts). */
+.loopback-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  margin: 0 0 1rem;
+  text-align: left;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #b5bac1;
+  cursor: pointer;
+}
+
+.loopback-field input {
+  /* Nudged down to sit on the first line of a label that wraps to two. */
+  margin-top: 0.15rem;
+  accent-color: #5865f2;
+  cursor: pointer;
+}
+
+.loopback-field small {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+  color: #949ba4;
+}
+
 /* Empty by default; only takes space once a warning is set (e.g. no audio captured). */
 .audio-notice {
   margin: 0;
@@ -231,11 +259,28 @@ body.viewer .status {
   box-shadow: none;
 }
 
-#viewer-canvas {
+#viewer-canvas,
+#viewer-video {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+/* Only one of the two ever shows. The canvas is the WebSocket relay's WebCodecs
+   output; the video element is a direct connection to the presenter, which takes over
+   only once it has genuinely painted a frame (see playback/rtcViewer.ts). Swapped by a
+   class on .player so nothing has to reach into either element's own style. */
+#viewer-video {
+  display: none;
+}
+
+.player.is-direct #viewer-canvas {
+  display: none;
+}
+
+.player.is-direct #viewer-video {
+  display: block;
 }
 
 /* Invisible hover target along the bottom of the player. Hovering anywhere in this
@@ -252,6 +297,9 @@ body.viewer .status {
   min-height: 90px;
   display: flex;
   align-items: flex-end;
+  /* Above the broadcasts popover: without this the panel covered the very button that
+     opened it, leaving no way to close it again. */
+  z-index: 6;
 }
 
 .overlay-bar {
@@ -395,48 +443,330 @@ body.viewer .status {
   min-width: 0.5rem;
 }
 
-/* Broadcast picker, shown only when a room carries more than one live stream. Sits at
-   the top of the player so it never collides with the overlay controls at the bottom. */
-.stream-picker {
+/* The broadcast list (ui/broadcastsPanel.ts): every broadcast on the relay for an admin,
+   this channel's for everyone else. A compact popover, never a full-screen takeover --
+   it sits on top of a live video the viewer is still watching.
+   Height is capped against the player so it can't reach past the bar. */
+.broadcasts-panel {
+  /* .player sets line-height: 0 for the canvas, and everything in here inherits it --
+     which collapsed each row's name to a zero-height line, clipped away entirely, and
+     left only the viewer pill visible. Text needs a real line box. */
+  line-height: 1.35;
+  --panel-bg: #111214;
   position: absolute;
+  /* Anchored to the top, not above the control bar. .controls-zone is 90px tall and
+     stacks higher, so anything overlapping it has its clicks swallowed -- which is what
+     made the close button dead. Sitting at the top keeps the panel clear of it entirely,
+     and leaves the button that opened it reachable at the bottom. */
   top: 0.75rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 3;
+  right: 0.75rem;
+  z-index: 7;
   display: flex;
-  gap: 0.3rem;
-  padding: 0.25rem;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  max-width: calc(100% - 1.5rem);
-  overflow-x: auto;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(22rem, calc(100% - 1.5rem));
+  /* Stops short of the control bar rather than running under it. */
+  max-height: calc(100% - 7rem);
+  border-radius: 0.75rem;
+  background: var(--panel-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5);
+  color: #f2f3f5;
+  overflow: hidden;
 }
 
-.stream-tab {
+.broadcasts-head {
   flex-shrink: 0;
-  padding: 0.3rem 0.85rem;
-  border: none;
-  border-radius: 999px;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.65);
-  font-size: 0.78rem;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-  transition:
-    background 0.15s ease,
-    color 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.8rem 0.7rem 0.6rem 1rem;
 }
 
-.stream-tab:hover {
-  background: rgba(255, 255, 255, 0.12);
+.broadcasts-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  font-weight: 700;
   color: #f2f3f5;
 }
 
-.stream-tab.is-active {
+/* How many are live right now, in the live red so it reads as the same signal as the
+   dot on each avatar. Empty (hidden) while loading or when nothing is live. */
+.broadcasts-count {
+  min-width: 1.3rem;
+  padding: 0.05rem 0.4rem;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: rgba(242, 63, 67, 0.16);
+  color: #ff8a8d;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.broadcasts-count:empty {
+  display: none;
+}
+
+/* Explicit dismiss, because the toggle button sits behind the video the panel covers
+   and isn't an obvious way back out. */
+.broadcasts-close {
+  flex-shrink: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.broadcasts-close:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+#broadcasts-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 0 0.6rem 0.7rem;
+  font-size: 0.82rem;
+}
+
+.broadcasts-empty {
+  margin: 0;
+  padding: 0.4rem 0.7rem 0.7rem;
+  color: #949ba4;
+}
+
+/* A <button>, so rows are keyboard-reachable and announce themselves as actionable --
+   clicking one opens that broadcast, hopping rooms when it lives elsewhere.
+   Grid with a minmax(0, 1fr) middle track: the text column takes whatever the avatar
+   and the count leave, and can shrink below its content to ellipsise instead of
+   pushing the count out of the row. */
+.broadcast-row {
+  --ring: var(--panel-bg);
+  position: relative;
+  display: grid;
+  grid-template-columns: 2.1rem minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.7rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.55rem 0.65rem;
+  margin: 0;
+  border: none;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.broadcast-row + .broadcast-row {
+  margin-top: 2px;
+}
+
+.broadcast-row:hover {
+  --ring: #1c1d20;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.broadcast-row:focus-visible {
+  outline: 2px solid #5865f2;
+  outline-offset: -2px;
+}
+
+/* The one being watched: tinted, with an accent bar on the leading edge so it's
+   findable at a glance without reading any of the rows. */
+.broadcast-row.is-current {
+  --ring: #1c1f38;
+  background: rgba(88, 101, 242, 0.16);
+}
+
+.broadcast-row.is-current::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.6rem;
+  bottom: 0.6rem;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
   background: #5865f2;
+}
+
+/* Initial of the presenter on a colour derived from their id (set inline as
+   --avatar), with the live dot on its corner. The dot's ring is the row's own
+   background (--ring) so it reads as cut out of the avatar on every row state. */
+.broadcast-avatar {
+  position: relative;
+  width: 2.1rem;
+  height: 2.1rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--avatar, #5865f2);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ::after is the solid dot; ::before is a halo behind it that swells and fades, the
+   only ambient motion in the panel -- it means "this is live right now". */
+.broadcast-avatar::before,
+.broadcast-avatar::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 50%;
+  background: #f23f43;
+}
+
+.broadcast-avatar::after {
+  box-shadow: 0 0 0 2.5px var(--ring);
+}
+
+.broadcast-avatar::before {
+  animation: broadcast-live-halo 2.2s ease-out infinite;
+}
+
+@keyframes broadcast-live-halo {
+  from {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  to {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .broadcast-avatar::before {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+.broadcast-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.broadcast-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #f2f3f5;
+}
+
+/* Server › channel: the real hierarchy in Discord, read left to right. */
+.broadcast-where {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  white-space: nowrap;
+  font-size: 0.74rem;
+  color: #949ba4;
+}
+
+/* The server name gives way first: the channel is what tells two broadcasts in the
+   same server apart. */
+.broadcast-server {
+  flex: 0 3 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.broadcast-sep {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.broadcast-channel {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #b5bac1;
+}
+
+.broadcast-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+  font-size: 0.74rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #b5bac1;
+}
+
+.broadcast-meta svg {
+  opacity: 0.75;
+}
+
+.broadcast-row.is-current .broadcast-meta {
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: #5865f2;
+  color: #fff;
+}
+
+/* How many broadcasts this channel has, on the button that opens the list. Set from
+   App.ts only when there are two or more -- with the tabs gone, it's the cue that
+   there's a choice to make. */
+#broadcasts-btn {
+  position: relative;
+}
+
+#broadcasts-btn[data-count]:not([data-count=""])::after {
+  content: attr(data-count);
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: #f23f43;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.6);
+}
+
+.icon-btn.is-active {
+  background: rgba(88, 101, 242, 0.9);
+  border-color: transparent;
   color: #fff;
 }
 

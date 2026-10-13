@@ -3,6 +3,7 @@
 import "./ui/app.css";
 import {
   FrameType,
+  type ActiveBroadcast,
   type AudioParams,
   type ControlMessage,
   type EncodedFrame,
@@ -12,17 +13,20 @@ import { WsClient } from "./net/wsClient.js";
 import { startVideoDecodePipeline, type VideoDecodePipeline } from "./playback/videoDecodePipeline.js";
 import { startAudioDecodePipeline, type AudioDecodePipeline } from "./playback/audioDecodePipeline.js";
 import { createMediaClock } from "./playback/mediaClock.js";
+import { createRtcViewer } from "./playback/rtcViewer.js";
 import {
   ICON_BELL,
   ICON_END_STREAM,
   ICON_FULLSCREEN_ENTER,
   ICON_FULLSCREEN_EXIT,
   ICON_IDLE,
+  ICON_LIST,
   ICON_MUTED,
   ICON_VIDEO,
   ICON_VIDEO_OFF,
   ICON_VOLUME,
 } from "./ui/icons.js";
+import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } from "./ui/broadcastsPanel.js";
 
 /**
  * Entry point for watch.html -- a plain browser tab opened from inside the Activity
@@ -42,13 +46,20 @@ function main(): void {
     if (statusEl) statusEl.textContent = text;
   };
 
-  const roomId = getParam("room");
+  const initialRoomId = getParam("room");
   const userId = getParam("user") ?? "";
-  const guildId = getParam("guild");
-  if (!roomId) {
+  if (!initialRoomId) {
     setPageStatus('Link invalido: falta o parametro "?room=...". Abra esta pagina pelo botao "Assistir numa aba do navegador" dentro da Activity.');
     return;
   }
+  /**
+   * The room being watched. An admin can hop to another room from the broadcast list
+   * (see openBroadcast), so it isn't fixed for the page's lifetime.
+   */
+  let roomId: string = initialRoomId;
+  let guildId = getParam("guild");
+  /** Slot to select once a hop's "joined" lands; see openBroadcast. */
+  let pendingSlot: number | null = null;
 
   const root = document.querySelector<HTMLDivElement>("#app");
   if (!root) throw new Error("#app root element not found.");
@@ -58,7 +69,8 @@ function main(): void {
   root.innerHTML = `
     <div class="player" id="player">
       <canvas id="viewer-canvas"></canvas>
-      <div class="stream-picker" id="stream-picker" role="tablist" aria-label="Escolher transmissão"></div>
+      <video id="viewer-video" playsinline></video>
+      ${BROADCASTS_PANEL_HTML}
       <div class="idle-screen" id="idle-screen">
         <div class="idle-icon">${ICON_IDLE}</div>
         <p class="idle-title" id="idle-title">Ninguém está transmitindo</p>
@@ -69,6 +81,7 @@ function main(): void {
         <div class="overlay-bar">
           <span id="status-text" class="status-text"></span>
           <div class="spacer"></div>
+          <button id="broadcasts-btn" class="icon-btn" type="button" title="Escolher transmissão" style="display: none">${ICON_LIST}</button>
           <button id="alert-btn" class="icon-btn" type="button" title="Tocar um alerta para quem está transmitindo" style="display: none">${ICON_BELL}</button>
           <button id="end-stream-btn" class="icon-btn is-danger" type="button" title="Encerrar esta transmissão" style="display: none">${ICON_END_STREAM}</button>
           <button id="video-toggle-btn" class="icon-btn" type="button" title="Desativar vídeo (somente áudio)">${ICON_VIDEO}</button>
@@ -91,11 +104,23 @@ function main(): void {
   const volumeSlider = root.querySelector<HTMLInputElement>("#volume-slider")!;
   const fullscreenButton = root.querySelector<HTMLButtonElement>("#fullscreen-btn")!;
   const canvas = root.querySelector<HTMLCanvasElement>("#viewer-canvas")!;
+  const rtcVideo = root.querySelector<HTMLVideoElement>("#viewer-video")!;
   const idleScreen = root.querySelector<HTMLDivElement>("#idle-screen")!;
   const idleTitle = root.querySelector<HTMLParagraphElement>("#idle-title")!;
   const idleSubtitle = root.querySelector<HTMLParagraphElement>("#idle-subtitle")!;
   const resumeButton = root.querySelector<HTMLButtonElement>("#resume-btn")!;
-  const streamPicker = root.querySelector<HTMLDivElement>("#stream-picker")!;
+  const broadcastsButton = root.querySelector<HTMLButtonElement>("#broadcasts-btn")!;
+
+  // Same list as in the Activity (see ui/broadcastsPanel.ts). Everything it reads is
+  // looked up lazily, so it can be built before the state and socket declared below.
+  const broadcastsPanel = createBroadcastsPanel({
+    panel: root.querySelector<HTMLDivElement>("#broadcasts-panel")!,
+    context: () => ({ roomId, selectedSlot, isAdmin, userId }),
+    requestList: () => wsClient.sendControl({ kind: "request-active-broadcasts" }),
+    onPick: (broadcast) => void openBroadcast(broadcast),
+    onOpenChange: () => render(),
+  });
+  broadcastsButton.addEventListener("click", () => broadcastsPanel.toggle());
 
   // Shared between the two decode pipelines so video plays against audio's clock rather
   // than its own -- see playback/mediaClock.ts. Outlives both, since they're torn down
@@ -132,6 +157,38 @@ function main(): void {
    */
   let videoPipelineGeneration = 0;
 
+  /**
+   * Direct connection to the presenter, attempted alongside the relay and used only
+   * once it actually paints (see playback/rtcViewer.ts). Everything above stays exactly
+   * as it was until then, and comes straight back if the direct connection falls over.
+   */
+  const rtcViewer = createRtcViewer({
+    video: rtcVideo,
+    sendSignal: (slot, payload) => wsClient.sendControl({ kind: "rtc-signal", slot, payload }),
+    sendActive: (slot, active) => wsClient.sendControl({ kind: "rtc-active", slot, active }),
+    onTransportChange: (viaRtc) => {
+      player.classList.toggle("is-direct", viaRtc);
+      if (viaRtc) {
+        // The relay has stopped sending this stream, so the WebCodecs decoders would
+        // only sit there holding memory. Audio rides the same peer connection as the
+        // video and is played by the element itself, so its pipeline goes too.
+        teardownVideoPipeline();
+        canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+        audioDecodePipeline?.stop();
+        audioDecodePipeline = null;
+        currentAudioParams = null;
+      } else {
+        // Back on the relay with cold decoders. The server has already asked the
+        // presenter for a keyframe, but ask again: this path is also reached when the
+        // peer dies before the server hears about it.
+        void ensureVideoPipeline();
+        void ensureAudioPipeline(lastAudioParams);
+        if (hasPresenter()) wsClient.sendControl({ kind: "request-keyframe" });
+      }
+      render();
+    },
+  });
+
   const currentStream = (): StreamInfo | undefined => streams.find((s) => s.slot === selectedSlot);
   /** True when the stream being watched is this user's own broadcast. */
   const isSelf = () => userId !== "" && currentStream()?.presenterId === userId;
@@ -149,7 +206,13 @@ function main(): void {
       statusText.textContent = `${viewerCount} pessoa(s) na sala.`;
     }
 
-    renderStreamPicker();
+    // The broadcast list is how everyone picks what to watch (see ui/broadcastsPanel.ts).
+    const showBroadcastsButton = syncBroadcastsButton(broadcastsButton, {
+      isAdmin,
+      streamCount: streams.length,
+      isOpen: broadcastsPanel.isOpen,
+    });
+    if (!showBroadcastsButton) broadcastsPanel.close();
 
     // Being paused only matters visibly once there's actually a broadcast it's saving
     // bandwidth on -- with no presenter nothing was going to be sent either way, so
@@ -202,35 +265,13 @@ function main(): void {
     videoToggleButton.title = videoDisabled ? "Ativar vídeo" : "Desativar vídeo (somente áudio)";
   }
 
-  /** Tabs for picking which broadcast to watch -- see App.ts for the rationale. */
-  function renderStreamPicker(): void {
-    if (streams.length < 2) {
-      streamPicker.style.display = "none";
-      streamPicker.replaceChildren();
-      return;
-    }
-    streamPicker.style.display = "";
-
-    streamPicker.replaceChildren(
-      ...streams.map((stream, index) => {
-        const tab = document.createElement("button");
-        tab.type = "button";
-        tab.className = "stream-tab";
-        tab.setAttribute("role", "tab");
-        const isSelected = stream.slot === selectedSlot;
-        tab.classList.toggle("is-active", isSelected);
-        tab.setAttribute("aria-selected", String(isSelected));
-        tab.textContent =
-          userId !== "" && stream.presenterId === userId ? "Sua transmissão" : `Transmissão ${index + 1}`;
-        tab.addEventListener("click", () => void selectStream(stream.slot));
-        return tab;
-      }),
-    );
-  }
-
   /** Switches which broadcast is received -- see App.ts for why both pipelines restart. */
   async function selectStream(slot: number): Promise<void> {
     if (slot === selectedSlot) return;
+    // The direct connection was negotiated around the old broadcast's tracks. Dropped
+    // before the switch is announced so the player is back on the canvas by the time
+    // the server starts feeding the new stream.
+    rtcViewer.reset();
     selectedSlot = slot;
     wsClient.sendControl({ kind: "select-stream", slot });
 
@@ -241,6 +282,42 @@ function main(): void {
     await ensureVideoPipeline();
     void ensureAudioPipeline(audioParamsForSelection());
     wsClient.sendControl({ kind: "request-keyframe" });
+  }
+
+  /**
+   * Opens a broadcast picked from the list, hopping rooms when it lives elsewhere --
+   * only an admin's list ever offers another room. Mirrors App.ts's openBroadcast: the
+   * same socket re-joins, and the slot is selected once that join lands (pendingSlot).
+   */
+  async function openBroadcast(broadcast: ActiveBroadcast): Promise<void> {
+    if (broadcast.roomId === roomId) {
+      await selectStream(broadcast.slot);
+      return;
+    }
+
+    roomId = broadcast.roomId;
+    guildId = broadcast.guildId;
+    pendingSlot = broadcast.slot;
+    // Keep the address in step, so reloading this tab stays on the room now on screen.
+    const url = new URL(window.location.href);
+    url.searchParams.set("room", roomId);
+    if (guildId) url.searchParams.set("guild", guildId);
+    else url.searchParams.delete("guild");
+    history.replaceState(null, "", url);
+
+    // The direct connection belongs to the old room's presenter; nothing from it should
+    // keep painting once this tab has left that room.
+    rtcViewer.reset();
+    teardownVideoPipeline();
+    audioDecodePipeline?.stop();
+    audioDecodePipeline = null;
+    currentAudioParams = null;
+    canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    streams = [];
+    render();
+    setPageStatus("Entrando na transmissão...");
+
+    wsClient.sendControl({ kind: "join", roomId, userId: userId || null, guildId });
   }
 
   const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
@@ -311,8 +388,17 @@ function main(): void {
         isAdmin = message.isAdmin;
         viewerCount = message.viewerCount;
         streams = message.streams;
-        // Mirror the server's choice of default slot for a fresh connection.
+        // Mirror the server's choice of default slot for a fresh connection -- unless this
+        // join is a hop from the broadcast list, whose whole point was one specific slot.
         selectedSlot = streams[0]?.slot ?? 0;
+        if (pendingSlot !== null) {
+          const wanted = streams.find((s) => s.slot === pendingSlot);
+          if (wanted) {
+            selectedSlot = wanted.slot;
+            wsClient.sendControl({ kind: "select-stream", slot: wanted.slot });
+          }
+          pendingSlot = null;
+        }
         lastAudioParams = audioParamsForSelection();
         render();
         setPageStatus("");
@@ -329,13 +415,25 @@ function main(): void {
         render();
         return;
 
+      case "active-broadcasts":
+        broadcastsPanel.show(message.broadcasts);
+        return;
+
       case "streams-changed": {
         streams = message.streams;
         // The watched stream may have ended; the server already moved this connection
         // to a surviving slot, so follow it instead of receiving nothing.
-        if (!currentStream()) selectedSlot = streams[0]?.slot ?? selectedSlot;
+        if (!currentStream()) {
+          // Its presenter is gone, so any direct connection to it is dead too -- drop
+          // it now rather than waiting for the peer to notice on its own.
+          rtcViewer.reset();
+          selectedSlot = streams[0]?.slot ?? selectedSlot;
+        }
         lastAudioParams = audioParamsForSelection();
         render();
+        // Refresh an open list now rather than on the next poll, so it never offers a
+        // broadcast that has already ended.
+        broadcastsPanel.refresh();
         if (!isPausedHere) {
           void ensureAudioPipeline(lastAudioParams);
           if (hasPresenter()) wsClient.sendControl({ kind: "request-keyframe" });
@@ -347,6 +445,7 @@ function main(): void {
       // own pipelines here so it isn't sent to us twice.
       case "viewing-paused":
         isPausedHere = true;
+        rtcViewer.reset();
         teardownVideoPipeline();
         audioDecodePipeline?.stop();
         audioDecodePipeline = null;
@@ -360,6 +459,12 @@ function main(): void {
         void ensureVideoPipeline();
         void ensureAudioPipeline(lastAudioParams);
         if (hasPresenter()) wsClient.sendControl({ kind: "request-keyframe" });
+        return;
+
+      // Signalling for the direct connection. Nothing visible happens until it
+      // actually delivers a frame -- see playback/rtcViewer.ts.
+      case "rtc-signal":
+        if (message.slot !== undefined) rtcViewer.handleSignal(message.slot, message.payload);
         return;
 
       case "room-full":
@@ -418,6 +523,10 @@ function main(): void {
     wsClient.sendControl({ kind: "set-video-enabled", enabled: !videoDisabled });
     render();
     if (videoDisabled) {
+      // A peer connection carries the whole broadcast or none of it, so staying on one
+      // would make "audio only" save nothing. Back to the relay, where the server can
+      // actually withhold the video.
+      rtcViewer.reset();
       teardownVideoPipeline();
       canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
     } else {
@@ -426,10 +535,13 @@ function main(): void {
   }
 
   // --- Volume / mute ---
+  // Applied to both paths unconditionally: whichever one isn't carrying the audio
+  // right now still has to be at the right level for the moment it takes over.
   volumeSlider.addEventListener("input", () => {
     const volume = Number(volumeSlider.value) / 100;
     volumeSlider.style.setProperty("--fill", `${volumeSlider.value}%`);
     audioDecodePipeline?.setVolume(volume);
+    rtcViewer.setVolume(volume);
     muteButton.innerHTML = volume === 0 ? ICON_MUTED : ICON_VOLUME;
     if (volume > 0) lastVolumeBeforeMute = volume;
   });
@@ -440,6 +552,7 @@ function main(): void {
     volumeSlider.value = String(Math.round(nextVolume * 100));
     volumeSlider.style.setProperty("--fill", `${volumeSlider.value}%`);
     audioDecodePipeline?.setVolume(nextVolume);
+    rtcViewer.setVolume(nextVolume);
     muteButton.innerHTML = nextVolume === 0 ? ICON_MUTED : ICON_VOLUME;
   });
 
@@ -461,6 +574,11 @@ function main(): void {
   document.addEventListener("fullscreenchange", () => {
     fullscreenButton.innerHTML = document.fullscreenElement ? ICON_FULLSCREEN_EXIT : ICON_FULLSCREEN_ENTER;
     player.classList.toggle("is-fullscreen", Boolean(document.fullscreenElement));
+  });
+
+  // Escape dismisses the list; fullscreen already handles its own Escape natively.
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && broadcastsPanel.isOpen) broadcastsPanel.close();
   });
 
   // --- Resync after being backgrounded (see App.ts for the full rationale) ---
