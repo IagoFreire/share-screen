@@ -98,26 +98,6 @@ export interface StreamInfo {
   audio: AudioParams | null;
 }
 
-/**
- * One live broadcast anywhere on this relay, for the admin's monitoring list.
- *
- * Names are resolved server-side through the bot token and are null whenever that
- * lookup isn't possible (no token configured, bot not in that guild, API hiccup); the
- * ids are always present so the UI can fall back to them rather than showing nothing.
- */
-export interface ActiveBroadcast {
-  /** Voice channel id, which is what a room is keyed by. */
-  roomId: string;
-  guildId: string | null;
-  guildName: string | null;
-  channelName: string | null;
-  slot: number;
-  presenterId: string | null;
-  presenterName: string | null;
-  /** Viewers in that room, across all of its broadcasts. */
-  viewerCount: number;
-}
-
 export type ControlMessage =
   /**
    * `userId` lets the server verify that a stop request comes from the presenter.
@@ -168,13 +148,6 @@ export type ControlMessage =
    * slot's presenter, mirroring how request-stop-presenting works.
    */
   | { kind: "play-alert"; slot?: number }
-  /**
-   * Admin-only: every broadcast running on this relay, including rooms in other Discord
-   * servers. Polled by the client while the list is open rather than pushed, so the
-   * server doesn't have to track which sockets have a panel showing.
-   */
-  | { kind: "request-active-broadcasts" }
-  | { kind: "active-broadcasts"; broadcasts: ActiveBroadcast[] }
   | { kind: "viewer-count"; count: number }
   | { kind: "request-keyframe" }
   /**
@@ -197,48 +170,8 @@ export type ControlMessage =
    * off, unlike pausing the whole connection.
    */
   | { kind: "set-video-enabled"; enabled: boolean }
-  /**
-   * Server -> presenter tab: this viewer wants a direct connection, so make it an
-   * offer. Whoever holds the media is the one who offers, which is why negotiation
-   * always starts on the presenter's side even though the viewer is what triggers it.
-   */
-  | { kind: "rtc-want"; peerId: string }
-  /** Server -> presenter tab: that viewer went away or gave up; tear its peer down. */
-  | { kind: "rtc-bye"; peerId: string }
-  /**
-   * Opaque signalling envelope, forwarded without ever being parsed.
-   *
-   * Presenter -> server carries `peerId` (which viewer this is for); viewer -> server
-   * carries `slot` (which broadcast). The server fills in the other half from its own
-   * state before forwarding, so neither side can address a peer it wasn't introduced
-   * to, and neither has to be trusted about who it claims to be.
-   */
-  | { kind: "rtc-signal"; peerId?: string; slot?: number; payload: RtcSignalPayload }
-  /**
-   * Viewer -> server: a direct connection is now actually painting frames, or has
-   * stopped doing so. The relay keeps sending this viewer the slot's bytes until it
-   * says `true` -- see net/rtc.ts for why a "connected" peer isn't proof of anything.
-   */
-  | { kind: "rtc-active"; slot: number; active: boolean }
-  /**
-   * Server -> presenter tab: whether anybody still needs the WebSocket relay for this
-   * broadcast. Once every viewer is on a direct connection (or there are no viewers at
-   * all), the WebCodecs encode is pure waste -- those frames have nowhere to go, and
-   * the presenter's upload is now being spent on the direct connections instead.
-   */
-  | { kind: "relay-chunks"; enabled: boolean }
   | { kind: "room-full" }
   | { kind: "error"; message: string };
-
-/**
- * WebRTC signalling payload, kept structural rather than reusing the DOM's
- * RTCSessionDescriptionInit / RTCIceCandidateInit: this module is compiled for Node as
- * well (the server routes these without ever looking inside), and that build has no
- * DOM lib. The client casts at the edges, which is safe because the shapes match.
- */
-export type RtcSignalPayload =
-  | { type: "offer" | "answer"; sdp: string }
-  | { type: "ice"; candidate: Record<string, unknown> };
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();

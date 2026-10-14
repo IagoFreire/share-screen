@@ -43,11 +43,6 @@ export class RoomManager {
   get roomCount(): number {
     return this.rooms.size;
   }
-
-  /** Every live room, for the admin's cross-server broadcast list. */
-  allRooms(): Room[] {
-    return [...this.rooms.values()];
-  }
 }
 
 export const roomManager = new RoomManager(config.maxConcurrentRooms, config.maxViewersPerRoom);

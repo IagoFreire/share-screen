@@ -8,14 +8,6 @@ interface PresenterSlot {
   presenterId: string | null;
   /** Opus parameters, relayed so viewers configure a matching decoder. */
   audioParams: AudioParams | null;
-  /**
-   * Last value sent to this presenter in a `relay-chunks` message, or undefined before
-   * the first one. Kept here so relay.ts can recompute the answer on every event that
-   * could change it and only actually send when it flips -- the inputs (viewers
-   * joining, switching stream, WebRTC coming up or falling over) change far more often
-   * than the answer does.
-   */
-  relayChunksEnabled?: boolean;
 }
 
 /**
@@ -30,12 +22,6 @@ interface PresenterSlot {
  */
 export class Room {
   readonly id: string;
-  /**
-   * Guild this room's channel belongs to, learned from the first join that supplies it.
-   * Only used to label the admin's cross-server broadcast list -- the relay itself never
-   * needs it, since rooms are keyed by channel id, which is already globally unique.
-   */
-  guildId: string | null = null;
   private readonly presenters = new Map<number, PresenterSlot>();
   private readonly viewers = new Set<WebSocket>();
   private readonly maxViewers: number;

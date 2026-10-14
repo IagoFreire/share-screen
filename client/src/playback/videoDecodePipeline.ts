@@ -2,7 +2,6 @@ import {
   AV_SYNC_PLAUSIBILITY_WINDOW_US,
   VIDEO_JITTER_BUFFER_MAX_FRAMES,
   VIDEO_JITTER_BUFFER_SECONDS,
-  VIDEO_MAX_LAG_SECONDS,
 } from "@screenshare-bot/shared";
 import { VIDEO_CODEC } from "../capture/videoEncodePipeline.js";
 import type { MediaClock } from "./mediaClock.js";
@@ -125,20 +124,7 @@ export async function startVideoDecodePipeline(
       baseTimestampUs = queue[0]!.timestampUs;
       basePerfMs = nowMs + VIDEO_JITTER_BUFFER_SECONDS * 1000;
     }
-    const dueUs = baseTimestampUs + (nowMs - basePerfMs) * 1000;
-
-    // Playing the queue out at real time never shortens it, so a backlog (rendering
-    // throttled behind another window, a burst after the network was suspended) would
-    // stay as delay for the rest of the broadcast. Past the ceiling, re-anchor on the
-    // newest frame: the loop in presentFrames then drops everything older and lands on
-    // live, with the normal jitter lead.
-    const newestUs = queue[queue.length - 1]!.timestampUs;
-    if (newestUs - dueUs > VIDEO_MAX_LAG_SECONDS * 1_000_000) {
-      baseTimestampUs = newestUs;
-      basePerfMs = nowMs + VIDEO_JITTER_BUFFER_SECONDS * 1000;
-      return newestUs - VIDEO_JITTER_BUFFER_SECONDS * 1_000_000;
-    }
-    return dueUs;
+    return baseTimestampUs + (nowMs - basePerfMs) * 1000;
   }
 
   /** Presents every frame whose scheduled time has arrived, drawing only the newest. */

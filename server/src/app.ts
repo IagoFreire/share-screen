@@ -1,7 +1,6 @@
 import express, { type Express } from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_STUN_URL } from "@screenshare-bot/shared";
 import { config, assertDiscordOAuthConfigured } from "./config.js";
 import { exchangeCodeForToken } from "./auth/discordOAuth.js";
 
@@ -24,25 +23,6 @@ export function createApp(): Express {
   // rotating one left the Activity opening fine and failing silently at login.
   app.get("/api/config", (_req, res) => {
     res.json({ clientId: config.discordClientId });
-  });
-
-  // ICE servers for the direct viewer<->presenter connections that ride on top of the
-  // relay (see ws/relay.ts). Served at runtime rather than built into the bundle
-  // because TURN credentials are short-lived and must not ship to the client except
-  // when they're actually in use. With no TURN configured this is just public STUN,
-  // which is enough for most home NATs -- anyone it can't help stays on the relay.
-  app.get("/api/ice", (_req, res) => {
-    const iceServers: Array<{ urls: string; username?: string; credential?: string }> = [
-      { urls: DEFAULT_STUN_URL },
-    ];
-    if (config.turnUrl) {
-      iceServers.push({
-        urls: config.turnUrl,
-        username: config.turnUsername,
-        credential: config.turnPassword,
-      });
-    }
-    res.json({ iceServers });
   });
 
   // Called by the Activity client after discordSdk.commands.authorize() returns a `code`.

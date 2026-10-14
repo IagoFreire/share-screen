@@ -25,16 +25,6 @@ export interface VideoEncodePipelineOptions {
 export interface VideoEncodePipeline {
   /** Forces the next encoded frame to be a keyframe (e.g. when a new viewer joins). */
   requestKeyframe: () => void;
-  /**
-   * Stops or resumes encoding without tearing the pipeline down.
-   *
-   * Used when every viewer has moved to a direct connection (or nobody is watching at
-   * all): the encoded frames would have nowhere to go, and encoding 1080p60 twice over
-   * -- once here, once inside WebRTC -- is the most expensive thing this tab does.
-   * Captured frames are still read and closed while paused, because leaving them unread
-   * would stall the capture track itself.
-   */
-  setEncodingEnabled: (enabled: boolean) => void;
   stop: () => void;
 }
 
@@ -103,7 +93,6 @@ export async function startVideoEncodePipeline(
   const reader = processor.readable.getReader();
 
   let stopped = false;
-  let encodingEnabled = true;
   let lastKeyframeAt = 0;
   let forceKeyframeNow = true; // always start with a keyframe
 
@@ -111,13 +100,6 @@ export async function startVideoEncodePipeline(
     while (!stopped) {
       const { done, value: frame } = await reader.read();
       if (done || !frame) break;
-
-      // Drained and dropped rather than skipped: an unread MediaStreamTrackProcessor
-      // eventually stops the source track, which would end the capture outright.
-      if (!encodingEnabled) {
-        frame.close();
-        continue;
-      }
 
       // First frame, or the source changed size (e.g. the shared window was resized).
       if (frame.displayWidth !== configuredWidth || frame.displayHeight !== configuredHeight) {
@@ -147,13 +129,6 @@ export async function startVideoEncodePipeline(
   return {
     requestKeyframe: () => {
       forceKeyframeNow = true;
-    },
-    setEncodingEnabled: (enabled: boolean) => {
-      if (encodingEnabled === enabled) return;
-      encodingEnabled = enabled;
-      // Everything the viewers' decoders were holding is stale after a gap, so resume
-      // on a fresh keyframe rather than a delta that references frames never sent.
-      if (enabled) forceKeyframeNow = true;
     },
     stop: () => {
       stopped = true;
