@@ -118,6 +118,20 @@ export interface ActiveBroadcast {
   viewerCount: number;
 }
 
+/** The Discord account a desktop-app session belongs to, as the app displays it. */
+export interface DesktopUser {
+  id: string;
+  username: string;
+  globalName: string | null;
+  avatarUrl: string | null;
+}
+
+/** POST /api/desktop/login response: a signed session plus who it belongs to. */
+export interface DesktopLoginResponse {
+  session: string;
+  user: DesktopUser;
+}
+
 export type ControlMessage =
   /**
    * `userId` lets the server verify that a stop request comes from the presenter.

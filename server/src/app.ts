@@ -1,12 +1,36 @@
 import express, { type Express } from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { config, assertDiscordOAuthConfigured } from "./config.js";
-import { exchangeCodeForToken } from "./auth/discordOAuth.js";
+import { config, assertDiscordOAuthConfigured, assertSessionConfigured } from "./config.js";
+import { exchangeCodeForToken, fetchDiscordUser } from "./auth/discordOAuth.js";
+import { createDesktopRouter } from "./routes/desktopRoutes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Built client bundle (client/dist), served as static files so the relay is a single process/port.
 const clientDistPath = path.resolve(__dirname, "../../client/dist");
+
+/**
+ * The desktop app's API, or -- when SESSION_SECRET is missing -- a stub that says so.
+ * A misconfigured desktop login must never take the Activity down with it, so this
+ * degrades to 503 instead of throwing at startup.
+ */
+function createDesktopApi(): express.RequestHandler {
+  try {
+    assertSessionConfigured();
+  } catch (error) {
+    console.warn(`Desktop app login disabled: ${(error as Error).message}`);
+    return (_req, res) => {
+      res.status(503).json({ error: "desktop-login-not-configured" });
+    };
+  }
+
+  return createDesktopRouter({
+    exchangeCode: (code) => exchangeCodeForToken(code, config.desktopRedirectUri),
+    fetchUser: fetchDiscordUser,
+    now: Date.now,
+    secret: config.sessionSecret,
+  });
+}
 
 export function createApp(): Express {
   const app = express();
@@ -49,6 +73,8 @@ export function createApp(): Express {
       res.status(502).json({ error: "Discord OAuth2 exchange failed." });
     }
   });
+
+  app.use("/api/desktop", createDesktopApi());
 
   app.use(express.static(clientDistPath));
   app.get("*", (_req, res) => {

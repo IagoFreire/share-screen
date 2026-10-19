@@ -1,6 +1,8 @@
+import type { DesktopUser } from "@screenshare-bot/shared";
 import { config } from "../config.js";
 
 const DISCORD_TOKEN_URL = "https://discord.com/api/oauth2/token";
+const DISCORD_API_BASE = "https://discord.com/api/v10";
 
 /**
  * Discord requires a Redirect URI to be registered for the app (Developer Portal >
@@ -24,13 +26,16 @@ export interface DiscordTokenResponse {
  * Exchanges the `code` obtained from the client's discordSdk.commands.authorize() call
  * for an access token.
  */
-export async function exchangeCodeForToken(code: string): Promise<DiscordTokenResponse> {
+export async function exchangeCodeForToken(
+  code: string,
+  redirectUri: string = REDIRECT_URI,
+): Promise<DiscordTokenResponse> {
   const body = new URLSearchParams({
     client_id: config.discordClientId,
     client_secret: config.discordClientSecret,
     grant_type: "authorization_code",
     code,
-    redirect_uri: REDIRECT_URI,
+    redirect_uri: redirectUri,
   });
 
   const response = await fetch(DISCORD_TOKEN_URL, {
@@ -44,4 +49,29 @@ export async function exchangeCodeForToken(code: string): Promise<DiscordTokenRe
   }
 
   return (await response.json()) as DiscordTokenResponse;
+}
+
+interface DiscordApiUser {
+  id: string;
+  username: string;
+  global_name?: string | null;
+  avatar?: string | null;
+}
+
+/** Who an OAuth access token belongs to, shaped for the desktop app. */
+export async function fetchDiscordUser(accessToken: string): Promise<DesktopUser> {
+  const response = await fetch(`${DISCORD_API_BASE}/users/@me`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new Error(`Discord /users/@me failed: ${response.status} ${await response.text()}`);
+  }
+
+  const user = (await response.json()) as DiscordApiUser;
+  return {
+    id: user.id,
+    username: user.username,
+    globalName: user.global_name ?? null,
+    avatarUrl: user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64` : null,
+  };
 }
