@@ -2,8 +2,9 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
-import type { DesktopUser } from "@screenshare-bot/shared";
+import type { DesktopUser, VoiceLocation } from "@screenshare-bot/shared";
 import { verifySessionToken } from "../auth/session.js";
+import { VoiceLookupError } from "../auth/voiceLocator.js";
 import { createDesktopRouter, type DesktopRouterDeps } from "./desktopRoutes.js";
 
 const SECRET = "test-secret-that-is-at-least-32-characters-long";
@@ -16,6 +17,7 @@ async function start(overrides: Partial<DesktopRouterDeps> = {}): Promise<string
   const deps: DesktopRouterDeps = {
     exchangeCode: async () => ({ access_token: "discord-token" }),
     fetchUser: async () => USER,
+    locateVoice: async () => null,
     now: () => NOW,
     secret: SECRET,
     ...overrides,
@@ -65,6 +67,50 @@ describe("POST /api/desktop/login", () => {
       },
     });
     expect((await postLogin(base, { code: "abc" })).status).toBe(502);
+  });
+});
+
+describe("GET /api/desktop/voice", () => {
+  const LOCATION: VoiceLocation = {
+    guildId: "200",
+    guildName: "Servidor dos Amigos",
+    guildIconUrl: null,
+    channelId: "999",
+    channelName: "Jogando",
+  };
+
+  async function voiceAs(base: string): Promise<Response> {
+    const login = (await (await postLogin(base, { code: "abc" })).json()) as { session: string };
+    return fetch(`${base}/voice`, { headers: { Authorization: `Bearer ${login.session}` } });
+  }
+
+  it("voice returns the location for the session's user", async () => {
+    const asked: string[] = [];
+    const base = await start({
+      locateVoice: async (userId) => {
+        asked.push(userId);
+        return LOCATION;
+      },
+    });
+
+    const response = await voiceAs(base);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ location: LOCATION });
+    expect(asked).toEqual(["42"]);
+  });
+
+  it("voice maps a failed lookup to 503", async () => {
+    const base = await start({
+      locateVoice: async () => {
+        throw new VoiceLookupError("rate limited");
+      },
+    });
+
+    const response = await voiceAs(base);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "voice-lookup-failed" });
   });
 });
 

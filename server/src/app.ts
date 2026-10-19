@@ -4,6 +4,10 @@ import { fileURLToPath } from "node:url";
 import { config, assertDiscordOAuthConfigured, assertSessionConfigured } from "./config.js";
 import { exchangeCodeForToken, fetchDiscordUser } from "./auth/discordOAuth.js";
 import { createDesktopRouter } from "./routes/desktopRoutes.js";
+import { createVoiceLocator, VoiceLookupError } from "./auth/voiceLocator.js";
+import { resolveChannelName } from "./auth/discordNames.js";
+
+const DISCORD_API_BASE = "https://discord.com/api/v10";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Built client bundle (client/dist), served as static files so the relay is a single process/port.
@@ -24,12 +28,31 @@ function createDesktopApi(): express.RequestHandler {
     };
   }
 
+  const voiceLocator = createVoiceLocator({
+    fetchJson: fetchWithBotToken,
+    now: Date.now,
+    resolveChannelName,
+  });
+
   return createDesktopRouter({
     exchangeCode: (code) => exchangeCodeForToken(code, config.desktopRedirectUri),
     fetchUser: fetchDiscordUser,
+    locateVoice: (userId) => voiceLocator.locate(userId),
     now: Date.now,
     secret: config.sessionSecret,
   });
+}
+
+/** Bot-token GET for the voice locator; without a token there is nothing to ask Discord with. */
+async function fetchWithBotToken(apiPath: string): Promise<{ status: number; body: unknown }> {
+  if (!config.discordBotToken) {
+    throw new VoiceLookupError("DISCORD_BOT_TOKEN is not configured; the desktop app can't find voice channels.");
+  }
+  const response = await fetch(`${DISCORD_API_BASE}${apiPath}`, {
+    headers: { Authorization: `Bot ${config.discordBotToken}` },
+  });
+  const body: unknown = response.ok ? await response.json() : null;
+  return { status: response.status, body };
 }
 
 export function createApp(): Express {

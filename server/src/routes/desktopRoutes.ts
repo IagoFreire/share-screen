@@ -1,5 +1,5 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
-import type { DesktopLoginResponse, DesktopUser } from "@screenshare-bot/shared";
+import type { DesktopLoginResponse, DesktopUser, VoiceLocation } from "@screenshare-bot/shared";
 import { createSessionToken, verifySessionToken } from "../auth/session.js";
 
 /**
@@ -10,6 +10,8 @@ export interface DesktopRouterDeps {
   /** Swaps an OAuth code (from the app's loopback redirect) for a Discord access token. */
   exchangeCode(code: string): Promise<{ access_token: string }>;
   fetchUser(accessToken: string): Promise<DesktopUser>;
+  /** Rejects (VoiceLookupError) when Discord couldn't answer, resolves null when not in voice. */
+  locateVoice(userId: string): Promise<VoiceLocation | null>;
   now(): number;
   secret: string;
 }
@@ -56,6 +58,17 @@ export function createDesktopRouter(deps: DesktopRouterDeps): Router {
   // Lets the app check a stored session at startup without touching Discord at all.
   router.get("/me", sessionGuard, (_req, res) => {
     res.json({ userId: res.locals.userId as string });
+  });
+
+  // A failed lookup is a 503, never `location: null`: the app keeps showing the last
+  // known channel through a Discord hiccup instead of flashing "not in a voice channel".
+  router.get("/voice", sessionGuard, async (_req, res) => {
+    try {
+      res.json({ location: await deps.locateVoice(res.locals.userId as string) });
+    } catch (error) {
+      console.warn("Desktop voice lookup failed:", error);
+      res.status(503).json({ error: "voice-lookup-failed" });
+    }
   });
 
   return router;

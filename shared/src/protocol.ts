@@ -126,6 +126,15 @@ export interface DesktopUser {
   avatarUrl: string | null;
 }
 
+/** The voice channel a desktop user is in right now (GET /api/desktop/voice). */
+export interface VoiceLocation {
+  guildId: string;
+  guildName: string | null;
+  guildIconUrl: string | null;
+  channelId: string;
+  channelName: string | null;
+}
+
 /** POST /api/desktop/login response: a signed session plus who it belongs to. */
 export interface DesktopLoginResponse {
   session: string;
