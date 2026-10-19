@@ -7,10 +7,10 @@ export const MAX_VIEWERS_PER_ROOM_DEFAULT = 10;
  * Cheaper than it sounds: viewers watch one stream at a time, so egress stays
  * "viewers x bitrate" no matter how many are live. What scales with this number is
  * *ingress* (one upload per presenter), which doesn't count against the instance's
- * outbound allowance. The cap is really about keeping the picker UI legible and
- * bounding per-presenter bookkeeping.
+ * outbound allowance. The cap is really about keeping the broadcast list short and
+ * bounding per-presenter bookkeeping (slots are a 1-byte field, so far below its limit).
  */
-export const MAX_PRESENTERS_PER_ROOM = 2;
+export const MAX_PRESENTERS_PER_ROOM = 5;
 
 export const TARGET_VIDEO_BITRATE_KBPS_DEFAULT = 6000;
 /**

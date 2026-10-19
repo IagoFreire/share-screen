@@ -98,6 +98,26 @@ export interface StreamInfo {
   audio: AudioParams | null;
 }
 
+/**
+ * One live broadcast anywhere on this relay, for the broadcast list.
+ *
+ * Names are resolved server-side through the bot token and are null whenever that
+ * lookup isn't possible (no token configured, bot not in that guild, API hiccup); the
+ * ids are always present so the UI can fall back to them rather than showing nothing.
+ */
+export interface ActiveBroadcast {
+  /** Voice channel id, which is what a room is keyed by. */
+  roomId: string;
+  guildId: string | null;
+  guildName: string | null;
+  channelName: string | null;
+  slot: number;
+  presenterId: string | null;
+  presenterName: string | null;
+  /** Viewers in that room, across all of its broadcasts. */
+  viewerCount: number;
+}
+
 export type ControlMessage =
   /**
    * `userId` lets the server verify that a stop request comes from the presenter.
@@ -148,6 +168,14 @@ export type ControlMessage =
    * slot's presenter, mirroring how request-stop-presenting works.
    */
   | { kind: "play-alert"; slot?: number }
+  /**
+   * The broadcast list: this channel's broadcasts for everyone, every broadcast on the
+   * relay (other Discord servers included) for an admin. Polled by the client while the
+   * list is open rather than pushed, so the server doesn't have to track which sockets
+   * have a panel showing.
+   */
+  | { kind: "request-active-broadcasts" }
+  | { kind: "active-broadcasts"; broadcasts: ActiveBroadcast[] }
   | { kind: "viewer-count"; count: number }
   | { kind: "request-keyframe" }
   /**

@@ -22,6 +22,12 @@ interface PresenterSlot {
  */
 export class Room {
   readonly id: string;
+  /**
+   * Guild this room's channel belongs to, learned from the first join that supplies it.
+   * Only used to label the admin's cross-server broadcast list -- the relay itself never
+   * needs it, since rooms are keyed by channel id, which is already globally unique.
+   */
+  guildId: string | null = null;
   private readonly presenters = new Map<number, PresenterSlot>();
   private readonly viewers = new Set<WebSocket>();
   private readonly maxViewers: number;

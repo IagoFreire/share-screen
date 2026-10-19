@@ -13,6 +13,7 @@ import { config } from "../config.js";
 import type { Room } from "./room.js";
 import { sendOrDrop, clearBackpressureState } from "./backpressure.js";
 import { isUserInVoiceChannel } from "../auth/verifyMember.js";
+import { resolveChannelName, resolveGuildName, resolveUserName } from "../auth/discordNames.js";
 
 interface ConnectionState {
   roomId: string | null;
@@ -66,6 +67,40 @@ function getState(ws: WebSocket): ConnectionState {
     connectionState.set(ws, state);
   }
   return state;
+}
+
+/**
+ * Sends the broadcast list: every broadcast on this relay (all rooms, and therefore all
+ * Discord servers) when `onlyRoomId` is null, or just the ones in that room.
+ *
+ * Name lookups run in parallel and are cached, so the repeated polling that keeps the
+ * panel fresh costs at most a handful of API calls when something new appears.
+ */
+async function sendActiveBroadcasts(ws: WebSocket, onlyRoomId: string | null): Promise<void> {
+  const rooms = roomManager.allRooms().filter((room) => onlyRoomId === null || room.id === onlyRoomId);
+  const entries = rooms.flatMap((room) => room.streams.map((stream) => ({ room, stream })));
+
+  const broadcasts = await Promise.all(
+    entries.map(async ({ room, stream }) => {
+      const [guildName, channelName, presenterName] = await Promise.all([
+        resolveGuildName(room.guildId),
+        resolveChannelName(room.id),
+        resolveUserName(stream.presenterId),
+      ]);
+      return {
+        roomId: room.id,
+        guildId: room.guildId,
+        guildName,
+        channelName,
+        slot: stream.slot,
+        presenterId: stream.presenterId,
+        presenterName,
+        viewerCount: room.viewerCount,
+      };
+    }),
+  );
+
+  send(ws, { kind: "active-broadcasts", broadcasts });
 }
 
 /** Whether this user may end broadcasts other than their own (see config.adminUserIds). */
@@ -186,7 +221,10 @@ async function handleJoin(
     return;
   }
 
-  if (message.guildId && message.userId) {
+  // Admins skip the membership check on purpose: monitoring rooms across servers means
+  // opening broadcasts in channels they are not connected to, which is the whole point
+  // of the active-broadcast list.
+  if (message.guildId && message.userId && !isAdmin(message.userId)) {
     const allowed = await isUserInVoiceChannel(message.guildId, message.roomId, message.userId);
     if (!allowed) {
       send(ws, { kind: "error", message: "You must be in this voice channel to join." });
@@ -194,8 +232,35 @@ async function handleJoin(
     }
   }
 
+  // Re-joining on a live socket (an admin hopping to another room) has to leave the old
+  // one first, or this connection stays a viewer there and keeps being sent its frames
+  // -- paying for two streams while watching one.
+  if (state.roomId && state.roomId !== message.roomId) {
+    // A broadcasting socket holds a slot in its room; hopping would leave that slot
+    // behind as a ghost broadcast nobody can end. Capture tabs never hop anyway.
+    if (state.presenterSlot !== null) {
+      send(ws, { kind: "error", message: "Stop broadcasting before switching rooms." });
+      return;
+    }
+    const previous = roomManager.getRoom(state.roomId);
+    if (previous) {
+      previous.removeViewer(ws);
+      broadcastControl(previous, { kind: "viewer-count", count: previous.viewerCount });
+      // Same as a disconnect (see handleClose): a sibling tab this connection had
+      // paused in the old room now has nothing showing it the stream.
+      if (state.userId) resumeConnectionForUser(previous, state.userId);
+      roomManager.removeRoomIfEmpty(state.roomId);
+    }
+    // A pause belonged to the old room's sibling tab; carried over, this connection
+    // would show as live while the relay withholds every frame from it.
+    state.isPaused = false;
+  }
+
   state.roomId = message.roomId;
   state.userId = message.userId;
+  // Recorded so the admin list can name the server a room belongs to. Only set once:
+  // it never changes for a given channel, and later joins may omit it.
+  room.guildId ??= message.guildId;
   room.addViewer(ws);
 
   // Default to the lowest live slot so a viewer joining mid-broadcast sees something
@@ -220,7 +285,9 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
 
   switch (message.kind) {
     case "join": {
-      void handleJoin(ws, state, message);
+      // Async, so the try/catch around handleMessage in wsServer.ts never sees its
+      // errors -- left unhandled, one bad join takes the whole relay down for everyone.
+      handleJoin(ws, state, message).catch((error) => console.error("Failed to handle join:", error));
       return;
     }
 
@@ -298,6 +365,18 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
 
       const presenter = room.getPresenter(message.slot);
       if (presenter) send(presenter.ws, { kind: "play-alert" });
+      return;
+    }
+
+    // Everyone gets the list -- it's how a viewer picks which broadcast to watch -- but
+    // only an admin sees other rooms. Scoped here rather than trusted to the client:
+    // a non-admin's list never even contains another channel's broadcasts.
+    case "request-active-broadcasts": {
+      if (isAdmin(state.userId)) {
+        sendActiveBroadcasts(ws, null).catch((error) => console.error("Failed to send broadcast list:", error));
+      } else if (state.roomId) {
+        sendActiveBroadcasts(ws, state.roomId).catch((error) => console.error("Failed to send broadcast list:", error));
+      }
       return;
     }
 
