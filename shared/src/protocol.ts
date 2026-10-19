@@ -147,8 +147,11 @@ export type ControlMessage =
    * `guildId` is required (alongside `userId`) for the optional bot-token voice
    * membership check -- without it, verification is skipped for that connection even
    * if DISCORD_BOT_TOKEN is configured.
+   *
+   * `session` (desktop app only) is a signed login; when present the server takes the
+   * user id from it and ignores `userId`, and an invalid one is refused outright.
    */
-  | { kind: "join"; roomId: string; userId: string | null; guildId: string | null }
+  | { kind: "join"; roomId: string; userId: string | null; guildId: string | null; session?: string | null }
   | {
       kind: "joined";
       roomId: string;
@@ -222,7 +225,8 @@ export type ControlMessage =
    */
   | { kind: "set-video-enabled"; enabled: boolean }
   | { kind: "room-full" }
-  | { kind: "error"; message: string };
+  /** `code` is set when the client should react, not just show the text. */
+  | { kind: "error"; message: string; code?: "invalid-session" };
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();

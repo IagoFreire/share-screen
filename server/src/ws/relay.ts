@@ -13,6 +13,8 @@ import { config } from "../config.js";
 import type { Room } from "./room.js";
 import { sendOrDrop, clearBackpressureState } from "./backpressure.js";
 import { isUserInVoiceChannel } from "../auth/verifyMember.js";
+import { verifySessionToken } from "../auth/session.js";
+import { resolveJoinIdentity } from "./joinIdentity.js";
 import { resolveChannelName, resolveGuildName, resolveUserName } from "../auth/discordNames.js";
 
 interface ConnectionState {
@@ -21,6 +23,9 @@ interface ConnectionState {
    *  to pair up a user's multiple simultaneous connections (Activity + an externally
    *  opened tab) for the pause/resume bandwidth-saving below. */
   userId: string | null;
+  /** True when `userId` came from a signed desktop session rather than the client's word;
+   *  such a connection can't present under any other id (see start-presenting). */
+  isVerified: boolean;
   /** Slot this connection broadcasts on, or null if it isn't presenting. */
   presenterSlot: number | null;
   /**
@@ -58,6 +63,7 @@ function getState(ws: WebSocket): ConnectionState {
     state = {
       roomId: null,
       userId: null,
+      isVerified: false,
       presenterSlot: null,
       selectedSlot: SLOT_PRESENTER,
       hasReceivedKeyframe: false,
@@ -215,6 +221,15 @@ async function handleJoin(
   state: ConnectionState,
   message: Extract<ControlMessage, { kind: "join" }>,
 ): Promise<void> {
+  const identity = resolveJoinIdentity(message, (token) =>
+    config.sessionSecret ? verifySessionToken(token, Date.now(), config.sessionSecret) : null,
+  );
+  if (!identity.ok) {
+    send(ws, { kind: "error", message: "Sessão expirada. Entre de novo.", code: "invalid-session" });
+    return;
+  }
+  const userId = identity.userId;
+
   const room = roomManager.getOrCreateRoom(message.roomId);
   if (!room || !room.canAddViewer()) {
     send(ws, { kind: "room-full" });
@@ -224,8 +239,8 @@ async function handleJoin(
   // Admins skip the membership check on purpose: monitoring rooms across servers means
   // opening broadcasts in channels they are not connected to, which is the whole point
   // of the active-broadcast list.
-  if (message.guildId && message.userId && !isAdmin(message.userId)) {
-    const allowed = await isUserInVoiceChannel(message.guildId, message.roomId, message.userId);
+  if (message.guildId && userId && !isAdmin(userId)) {
+    const allowed = await isUserInVoiceChannel(message.guildId, message.roomId, userId);
     if (!allowed) {
       send(ws, { kind: "error", message: "You must be in this voice channel to join." });
       return;
@@ -257,7 +272,8 @@ async function handleJoin(
   }
 
   state.roomId = message.roomId;
-  state.userId = message.userId;
+  state.userId = userId;
+  state.isVerified = identity.verified;
   // Recorded so the admin list can name the server a room belongs to. Only set once:
   // it never changes for a given channel, and later joins may omit it.
   room.guildId ??= message.guildId;
@@ -269,14 +285,14 @@ async function handleJoin(
   state.selectedSlot = streams[0]?.slot ?? SLOT_PRESENTER;
   state.hasReceivedKeyframe = false;
 
-  if (message.userId) pauseOtherConnectionsForUser(room, message.userId, ws);
+  if (userId) pauseOtherConnectionsForUser(room, userId, ws);
 
   send(ws, {
     kind: "joined",
     roomId: message.roomId,
     streams,
     viewerCount: room.viewerCount,
-    isAdmin: isAdmin(message.userId),
+    isAdmin: isAdmin(userId),
   });
 }
 
@@ -296,12 +312,13 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       const room = roomManager.getRoom(state.roomId);
       if (!room) return;
 
-      const slot = room.allocateSlot(ws, message.presenterId, message.audio);
+      const presenterId = state.isVerified ? state.userId : message.presenterId;
+      const slot = room.allocateSlot(ws, presenterId, message.audio);
       if (slot === null) {
         send(ws, { kind: "error", message: "Room already has the maximum number of broadcasts." });
         return;
       }
-      state.userId = message.presenterId;
+      state.userId = presenterId;
       state.presenterSlot = slot;
       // A presenting socket stops being a viewer: it never watches its own stream.
       room.removeViewer(ws);
