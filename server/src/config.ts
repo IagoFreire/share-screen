@@ -57,9 +57,27 @@ export const config = {
    * rebuild and redeploy, and so the list never lands in the repository.
    */
   adminUserIds: listEnv("ADMIN_USER_IDS"),
+
+  /** Signs desktop-app sessions (auth/session.ts). Rotating it logs every desktop user out. */
+  sessionSecret: process.env.SESSION_SECRET ?? "",
+  /**
+   * Where Discord sends the desktop app's OAuth code: a loopback port the app listens on
+   * only while a login is in progress. Must be registered in the Developer Portal, and
+   * the token exchange has to echo exactly this value back.
+   */
+  desktopRedirectUri: process.env.DESKTOP_REDIRECT_URI ?? "http://127.0.0.1:53134/callback",
 };
 
 export function assertDiscordOAuthConfigured(): void {
   requireEnv("DISCORD_CLIENT_ID");
   requireEnv("DISCORD_CLIENT_SECRET");
+}
+
+/** Shortest SESSION_SECRET accepted; anything shorter is guessable enough to forge sessions. */
+const MIN_SESSION_SECRET_LENGTH = 32;
+
+export function assertSessionConfigured(): void {
+  if (config.sessionSecret.length < MIN_SESSION_SECRET_LENGTH) {
+    throw new Error(`SESSION_SECRET must be at least ${MIN_SESSION_SECRET_LENGTH} characters for the desktop app.`);
+  }
 }
