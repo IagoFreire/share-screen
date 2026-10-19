@@ -63,6 +63,23 @@ The tunnel hostname must also be listed in `client/vite.config.ts` under
 `share.iagofreire.dev`; because this is a named tunnel the URL is stable, unlike
 ngrok's randomly-generated one.
 
+### Desktop app login
+
+The desktop app (`desktop/`) logs in with Discord through a loopback redirect and gets a
+signed session from this server. It needs two things in the repo-root `.env`:
+
+```bash
+# At least 32 characters. Generate one with:
+#   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+# Changing it logs every desktop user out.
+SESSION_SECRET=...
+# Optional; this is the default, and it must match what the app listens on.
+DESKTOP_REDIRECT_URI=http://127.0.0.1:53134/callback
+```
+
+And in the Discord Developer Portal, **OAuth2 → Redirects** must list
+`http://127.0.0.1:53134/callback` next to the existing `https://127.0.0.1`.
+
 ## Production
 
 Production path is **bare systemd + Caddy, not Docker**. The Docker daemon's own
