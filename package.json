@@ -11,9 +11,13 @@
     "dev:server": "npm run dev --workspace=server",
     "dev:client": "npm run dev --workspace=client",
     "build": "npm run build --workspace=shared && npm run build --workspace=client && npm run build --workspace=server",
-    "typecheck": "npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client"
+    "typecheck": "npm run build --workspace=shared && npm run typecheck --workspace=server && npm run typecheck --workspace=client",
+    "test": "vitest run"
   },
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
   }
 }
