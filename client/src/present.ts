@@ -7,8 +7,6 @@ import "./ui/app.css";
 import doorKnockUrl from "../assets/DoorKnock.mp3";
 import {
   buildQualityPreset,
-  FrameType,
-  SLOT_PRESENTER,
   type BitrateLevelKey,
   type ControlMessage,
   type FramerateKey,
@@ -17,8 +15,9 @@ import {
 } from "@screenshare-bot/shared";
 import { WsClient } from "./net/wsClient.js";
 import { startScreenCapture } from "./capture/screenCapture.js";
-import { startVideoEncodePipeline, type VideoEncodePipeline } from "./capture/videoEncodePipeline.js";
-import { startAudioEncodePipeline, type AudioEncodePipeline } from "./capture/audioEncodePipeline.js";
+import { startVideoEncodePipeline } from "./capture/videoEncodePipeline.js";
+import { startAudioEncodePipeline } from "./capture/audioEncodePipeline.js";
+import { createPresenterSession } from "./session/presenterSession.js";
 
 /**
  * Entry point for present.html -- a plain page opened in a normal browser tab
@@ -115,13 +114,6 @@ function main(): void {
   const qualityHint = root.querySelector<HTMLParagraphElement>("#quality-hint")!;
   const audioNotice = root.querySelector<HTMLParagraphElement>("#audio-notice")!;
 
-  let videoEncodePipeline: VideoEncodePipeline | null = null;
-  let audioEncodePipeline: AudioEncodePipeline | null = null;
-  let isPresenting = false;
-  let videoClock = 0;
-  let audioClock = 0;
-  /** Frame slot assigned by the server when this tab started presenting. */
-  let presenterSlot = SLOT_PRESENTER;
   /** Lazily created on the first alert; see playAlertChime. */
   let alertAudio: HTMLAudioElement | null = null;
 
@@ -199,15 +191,24 @@ function main(): void {
     },
   });
 
+  const session = createPresenterSession({
+    sendFrame: (header, payload) => wsClient.sendFrame(header, payload),
+    sendControl: (message) => wsClient.sendControl(message),
+    capture: startScreenCapture,
+    startVideo: startVideoEncodePipeline,
+    startAudio: startAudioEncodePipeline,
+    presenterId: getUserId(),
+  });
+  // The capture was closed from the browser's own "stop sharing" bar, or the user
+  // pressed "Parar transmissão" inside the Activity -- either way the broadcast is over.
+  session.onEnded(() => resetAfterStop());
+
   function handleControl(message: ControlMessage): void {
+    if (session.handleControl(message)) return;
+
     switch (message.kind) {
       case "joined":
         setStatus("");
-        return;
-      // The server decides which slot this broadcast occupies, since a room can carry
-      // several at once. Stamp it on outgoing frames from here on.
-      case "presenting-started":
-        presenterSlot = message.slot;
         return;
       case "room-full":
         setStatus("Sala cheia - nao foi possivel entrar.");
@@ -215,20 +216,12 @@ function main(): void {
       case "error":
         setStatus(`Erro: ${message.message}`);
         return;
-      case "request-keyframe":
-        videoEncodePipeline?.requestKeyframe();
-        return;
       // A moderator is trying to get this presenter's attention.
       case "play-alert":
         playAlertChime();
         return;
-      // The user pressed "Parar transmissão" inside the Discord Activity; the capture
-      // lives in this tab, so the actual teardown has to happen here.
-      case "request-stop-presenting":
-        if (isPresenting) stopPresenting();
-        return;
       case "viewer-count":
-        if (isPresenting) setStatus(`Compartilhando -- ${message.count} espectador(es).`);
+        if (session.isPresenting) setStatus(`Compartilhando -- ${message.count} espectador(es).`);
         return;
       default:
         return;
@@ -236,7 +229,7 @@ function main(): void {
   }
 
   shareButton.addEventListener("click", () => {
-    if (isPresenting) {
+    if (session.isPresenting) {
       stopPresenting();
     } else {
       void startPresenting();
@@ -245,67 +238,14 @@ function main(): void {
 
   async function startPresenting(): Promise<void> {
     try {
-      const quality = currentQuality();
-      const { videoTrack, audioTrack } = await startScreenCapture(quality);
-
-      videoEncodePipeline = await startVideoEncodePipeline(videoTrack, (chunk) => {
-        const payload = new Uint8Array(chunk.byteLength);
-        chunk.copyTo(payload);
-        videoClock += 1;
-        wsClient.sendFrame(
-          {
-            slot: presenterSlot,
-            type: FrameType.Video,
-            // The chunk's own timestamp (inherited from the captured VideoFrame), NOT
-            // performance.now(). Stamping at send time bakes in however long this frame
-            // spent being encoded, which varies with scene complexity and with how deep
-            // the encoder queue happens to be -- audio encodes in a fraction of that
-            // time and far more consistently, so send-time stamps make the A/V
-            // relationship jitter by tens of milliseconds at the source, before the
-            // network is even involved. Capture timestamps come off a clock shared with
-            // the audio track, which is what lets the viewer line the two back up.
-            timestamp: chunk.timestamp / 1000,
-            clock: videoClock,
-            keyFrame: chunk.type === "key",
-          },
-          payload,
-        );
-      }, { quality });
-
-      // Tab/system audio only (see screenCapture.ts) -- optional, since not every
-      // capture source offers it (e.g. sharing a window without "share audio" checked).
-      if (audioTrack) {
-        audioEncodePipeline = await startAudioEncodePipeline(audioTrack, (chunk) => {
-          const payload = new Uint8Array(chunk.byteLength);
-          chunk.copyTo(payload);
-          audioClock += 1;
-          wsClient.sendFrame(
-            // Capture timestamp rather than send time, for the same reason as video
-            // above -- and critically, on the same capture clock as the video track, so
-            // the viewer can align the two streams instead of guessing.
-            { slot: presenterSlot, type: FrameType.Audio, timestamp: chunk.timestamp / 1000, clock: audioClock },
-            payload,
-          );
-        });
-      }
-
-      videoTrack.addEventListener("ended", () => stopPresenting());
-
-      // Sent after the audio pipeline exists so viewers get the real Opus params
-      // (sample rate / channel count) and can configure a matching decoder.
-      wsClient.sendControl({
-        kind: "start-presenting",
-        presenterId: getUserId(),
-        audio: audioEncodePipeline?.params ?? null,
-      });
-      isPresenting = true;
+      const { hasAudio } = await session.start(currentQuality());
       shareButton.textContent = "Parar de compartilhar";
       shareButton.classList.add("is-stop");
 
       // getDisplayMedia only returns an audio track when the picker's "share audio"
       // checkbox is ticked, and Windows offers it only for a whole screen or a Chrome
       // tab -- never for a single window. Without this the broadcast is silently mute.
-      if (audioTrack) {
+      if (hasAudio) {
         audioNotice.textContent = "";
         audioNotice.classList.remove("is-warning");
       } else {
@@ -343,12 +283,11 @@ function main(): void {
   }
 
   function stopPresenting(): void {
-    videoEncodePipeline?.stop();
-    videoEncodePipeline = null;
-    audioEncodePipeline?.stop();
-    audioEncodePipeline = null;
-    wsClient.sendControl({ kind: "stop-presenting" });
-    isPresenting = false;
+    session.stop();
+    resetAfterStop();
+  }
+
+  function resetAfterStop(): void {
     shareButton.textContent = "Compartilhar tela";
     shareButton.classList.remove("is-stop");
     audioNotice.textContent = "";
@@ -359,9 +298,7 @@ function main(): void {
     setStatus("Voce parou de compartilhar. Pode fechar esta aba ou compartilhar de novo.");
   }
 
-  window.addEventListener("beforeunload", () => {
-    if (isPresenting) wsClient.sendControl({ kind: "stop-presenting" });
-  });
+  window.addEventListener("beforeunload", () => session.stop());
 
   wsClient.connect();
 }
