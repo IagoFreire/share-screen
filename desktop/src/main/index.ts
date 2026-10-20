@@ -24,6 +24,7 @@ import { buildContentSecurityPolicy, isAllowedPermission } from "./webSecurity";
 import { createSourceSelection, isSourceId, pickDisplayMedia, THUMBNAIL_SIZE, toDesktopSource } from "./capture";
 import { isAllowedNavigation } from "./navigation";
 import { resolveServerOrigin } from "./serverOrigin";
+import { mainWindowWebPreferences } from "./windowOptions";
 
 /**
  * Electron main process. The window is a thin shell around desktop.html, which the
@@ -115,12 +116,7 @@ function createMainWindow(): BrowserWindow {
     backgroundColor: "#313338",
     title: "ScreenShare",
     show: false,
-    webPreferences: {
-      preload: path.join(__dirname, "../preload/index.js"),
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false,
-    },
+    webPreferences: mainWindowWebPreferences(path.join(__dirname, "../preload/index.js")),
   });
 
   window.once("ready-to-show", () => window.show());
