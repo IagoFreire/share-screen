@@ -1,5 +1,15 @@
 import path from "node:path";
-import { app, BrowserWindow, ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent } from "electron";
+import {
+  app,
+  BrowserWindow,
+  desktopCapturer,
+  ipcMain,
+  session,
+  shell,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent,
+} from "electron";
+import { createSourceSelection, isSourceId, pickDisplayMedia, THUMBNAIL_SIZE, toDesktopSource } from "./capture";
 import { isAllowedNavigation } from "./navigation";
 import { resolveServerOrigin } from "./serverOrigin";
 
@@ -17,9 +27,37 @@ const ERR_ABORTED = -3;
 
 let mainWindow: BrowserWindow | null = null;
 
+/** Picked in desktop.html's own picker; granted on the page's next getDisplayMedia(). */
+const sourceSelection = createSourceSelection();
+
 /** Only the server's own pages may drive the IPC bridge (see navigation.ts). */
 function isTrustedSender(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
   return isAllowedNavigation(event.senderFrame?.url ?? "", serverOrigin);
+}
+
+function assertTrustedSender(event: IpcMainInvokeEvent): void {
+  if (!isTrustedSender(event)) throw new Error("Origem não autorizada.");
+}
+
+/**
+ * Answers the page's getDisplayMedia() with the source it picked beforehand (see
+ * capture.ts). Anything else -- no pick, or a window that closed in between -- is denied.
+ */
+function installDisplayMediaHandler(): void {
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    const selectedId = sourceSelection.take();
+    if (!isAllowedNavigation(request.frame?.url ?? "", serverOrigin)) {
+      callback({});
+      return;
+    }
+    desktopCapturer
+      .getSources({ types: ["screen", "window"] })
+      .then((sources) => callback(pickDisplayMedia(selectedId, sources) ?? {}))
+      .catch((error: unknown) => {
+        console.error("Listing capture sources failed:", error);
+        callback({});
+      });
+  });
 }
 
 function showOfflinePage(window: BrowserWindow): void {
@@ -75,13 +113,27 @@ function registerIpc(): void {
     else if (action === "close") window.close();
   });
 
+  ipcMain.handle("desktop:get-sources", async (event) => {
+    assertTrustedSender(event);
+    const sources = await desktopCapturer.getSources({
+      types: ["screen", "window"],
+      thumbnailSize: THUMBNAIL_SIZE,
+      fetchWindowIcons: true,
+    });
+    return sources.map(toDesktopSource);
+  });
+
+  ipcMain.handle("desktop:select-source", async (event, id: unknown) => {
+    assertTrustedSender(event);
+    if (!isSourceId(id)) throw new Error("Fonte de captura inválida.");
+    sourceSelection.set(id);
+  });
+
   const notYet = async (event: IpcMainInvokeEvent) => {
-    if (!isTrustedSender(event)) throw new Error("Origem não autorizada.");
+    assertTrustedSender(event);
     throw new Error("Ainda não disponível nesta versão do app.");
   };
-  for (const channel of ["desktop:get-sources", "desktop:select-source", "desktop:login"]) {
-    ipcMain.handle(channel, notYet);
-  }
+  ipcMain.handle("desktop:login", notYet);
   ipcMain.handle("desktop:get-stored-login", async () => null);
   ipcMain.handle("desktop:logout", async () => undefined);
 }
@@ -99,6 +151,7 @@ if (!app.requestSingleInstanceLock()) {
 
   void app.whenReady().then(() => {
     registerIpc();
+    installDisplayMediaHandler();
     mainWindow = createMainWindow();
   });
 
