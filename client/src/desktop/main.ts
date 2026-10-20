@@ -45,6 +45,7 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
           app?.refreshUserPanel();
         },
         onAlert: playKnock,
+        onInterrupted: (message) => api.notify("Sua transmissão parou", message),
       }),
     setLive: (isLive) => api.setLive(isLive),
     confirmLeave: () =>
