@@ -73,6 +73,7 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
     },
     isLive: () => live.isLive,
     viewerCount: () => (live.isLive ? viewerCount : null),
+    beforeLogout: () => live.end(),
   });
 
   live.onChange(() => {

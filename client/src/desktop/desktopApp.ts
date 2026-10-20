@@ -26,6 +26,8 @@ export interface DesktopAppHooks {
   onTransmit: (() => void) | null;
   isLive: () => boolean;
   viewerCount: () => number | null;
+  /** Runs before logging out (which reloads the page), so a live broadcast ends cleanly. */
+  beforeLogout: () => void;
 }
 
 export interface DesktopApp {
@@ -67,6 +69,7 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
   );
 
   async function logOut(): Promise<void> {
+    hooks.beforeLogout();
     await api.logout();
     window.location.reload();
   }

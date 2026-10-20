@@ -120,6 +120,14 @@ function createMainWindow(): BrowserWindow {
     return { action: "deny" };
   });
 
+  // A reload (logout, an invalid session) or a renderer crash takes the page's broadcast
+  // with it, and nothing on the page is left to send setLive(false). Without this the
+  // tray would keep the live badge and the close button would keep hiding the window.
+  window.webContents.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) setLiveState(false);
+  });
+  window.webContents.on("render-process-gone", () => setLiveState(false));
+
   // Server down or the tunnel offline: a local page with a retry button beats a blank window.
   window.webContents.on("did-fail-load", (_event, errorCode, _description, _url, isMainFrame) => {
     if (isMainFrame && errorCode !== ERR_ABORTED) showOfflinePage(window);
@@ -127,6 +135,11 @@ function createMainWindow(): BrowserWindow {
 
   void window.loadURL(appUrl);
   return window;
+}
+
+function setLiveState(live: boolean): void {
+  isLive = live;
+  appTray?.setLive(live);
 }
 
 function showMainWindow(): void {
@@ -153,8 +166,7 @@ function quitApp(): void {
 function registerIpc(): void {
   ipcMain.on("desktop:set-live", (event, live: unknown) => {
     if (!isTrustedSender(event)) return;
-    isLive = live === true;
-    appTray?.setLive(isLive);
+    setLiveState(live === true);
   });
 
   ipcMain.on("desktop:notify", (event, title: unknown, body: unknown) => {
