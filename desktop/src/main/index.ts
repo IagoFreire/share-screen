@@ -4,11 +4,15 @@ import {
   BrowserWindow,
   desktopCapturer,
   ipcMain,
+  safeStorage,
   session,
   shell,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from "electron";
+import type { DesktopLoginResponse, StoredLogin } from "@screenshare-bot/shared";
+import { LOGIN_TIMEOUT_MS, runLoopbackLogin } from "./auth/loopbackLogin";
+import { createSessionStore } from "./auth/sessionStore";
 import { createSourceSelection, isSourceId, pickDisplayMedia, THUMBNAIL_SIZE, toDesktopSource } from "./capture";
 import { isAllowedNavigation } from "./navigation";
 import { resolveServerOrigin } from "./serverOrigin";
@@ -129,13 +133,63 @@ function registerIpc(): void {
     sourceSelection.set(id);
   });
 
-  const notYet = async (event: IpcMainInvokeEvent) => {
+  const sessionStore = createSessionStore({
+    filePath: path.join(app.getPath("userData"), "session.bin"),
+    encrypt: (text) => safeStorage.encryptString(text),
+    decrypt: (data) => safeStorage.decryptString(data),
+  });
+  let loginInProgress: Promise<StoredLogin> | null = null;
+
+  ipcMain.handle("desktop:login", async (event) => {
     assertTrustedSender(event);
-    throw new Error("Ainda não disponível nesta versão do app.");
-  };
-  ipcMain.handle("desktop:login", notYet);
-  ipcMain.handle("desktop:get-stored-login", async () => null);
-  ipcMain.handle("desktop:logout", async () => undefined);
+    // A second click while the browser is open joins the running login instead of
+    // failing on the busy loopback port.
+    loginInProgress ??= runLoopbackLogin({
+      openExternal: (url) => shell.openExternal(url),
+      fetchClientId: fetchDiscordClientId,
+      exchange: exchangeLoginCode,
+      timeoutMs: LOGIN_TIMEOUT_MS,
+    })
+      .then(async (login) => {
+        if (safeStorage.isEncryptionAvailable()) await sessionStore.save(login);
+        mainWindow?.show();
+        mainWindow?.focus();
+        return login;
+      })
+      .finally(() => {
+        loginInProgress = null;
+      });
+    return loginInProgress;
+  });
+
+  ipcMain.handle("desktop:get-stored-login", async (event) => {
+    assertTrustedSender(event);
+    return safeStorage.isEncryptionAvailable() ? sessionStore.load() : null;
+  });
+
+  ipcMain.handle("desktop:logout", async (event) => {
+    assertTrustedSender(event);
+    await sessionStore.clear();
+  });
+}
+
+async function fetchDiscordClientId(): Promise<string> {
+  const response = await fetch(`${serverOrigin}/api/config`);
+  const body = (await response.json()) as { clientId?: unknown };
+  if (!response.ok || typeof body.clientId !== "string" || !body.clientId) {
+    throw new Error(`GET /api/config failed with HTTP ${response.status}.`);
+  }
+  return body.clientId;
+}
+
+async function exchangeLoginCode(code: string): Promise<DesktopLoginResponse> {
+  const response = await fetch(`${serverOrigin}/api/desktop/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  if (!response.ok) throw new Error(`POST /api/desktop/login failed with HTTP ${response.status}.`);
+  return (await response.json()) as DesktopLoginResponse;
 }
 
 // A second launch focuses the running app instead of opening another window.
