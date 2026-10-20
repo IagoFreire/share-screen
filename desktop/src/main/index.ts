@@ -4,6 +4,7 @@ import {
   BrowserWindow,
   desktopCapturer,
   ipcMain,
+  Notification,
   safeStorage,
   session,
   shell,
@@ -13,6 +14,8 @@ import {
 import type { DesktopLoginResponse, StoredLogin } from "@screenshare-bot/shared";
 import { LOGIN_TIMEOUT_MS, runLoopbackLogin } from "./auth/loopbackLogin";
 import { createSessionStore } from "./auth/sessionStore";
+import { createAppTray, type AppTray } from "./appTray";
+import { decideCloseAction, isNotification } from "./tray";
 import { createSourceSelection, isSourceId, pickDisplayMedia, THUMBNAIL_SIZE, toDesktopSource } from "./capture";
 import { isAllowedNavigation } from "./navigation";
 import { resolveServerOrigin } from "./serverOrigin";
@@ -29,7 +32,15 @@ const appUrl = `${serverOrigin}/desktop.html`;
 /** Chromium's "navigation aborted" -- a redirect or a newer load, not a real failure. */
 const ERR_ABORTED = -3;
 
+/** Time the page gets to send stop-presenting before a quit tears the window down. */
+const QUIT_GRACE_MS = 400;
+const APP_USER_MODEL_ID = "dev.iagofreire.screenshare";
+
 let mainWindow: BrowserWindow | null = null;
+let appTray: AppTray | null = null;
+/** Mirrors the page's broadcast state (desktop:set-live). */
+let isLive = false;
+let isQuitting = false;
 
 /** Picked in desktop.html's own picker; granted on the page's next getDisplayMedia(). */
 const sourceSelection = createSourceSelection();
@@ -88,6 +99,15 @@ function createMainWindow(): BrowserWindow {
 
   window.once("ready-to-show", () => window.show());
 
+  // Mid-broadcast, the close button tucks the window into the tray instead of ending
+  // the live; "Sair" in the tray (or quitting Windows) still closes for real.
+  window.on("close", (event) => {
+    if (decideCloseAction({ live: isLive, quitting: isQuitting }) === "hide-to-tray") {
+      event.preventDefault();
+      window.hide();
+    }
+  });
+
   window.webContents.on("will-navigate", (event, url) => {
     if (isAllowedNavigation(url, serverOrigin)) return;
     event.preventDefault();
@@ -108,7 +128,41 @@ function createMainWindow(): BrowserWindow {
   return window;
 }
 
+function showMainWindow(): void {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+/** Quitting while live first asks the page to end the broadcast, so viewers see it stop. */
+function quitApp(): void {
+  const finish = () => {
+    isQuitting = true;
+    app.quit();
+  };
+  if (!isLive) {
+    finish();
+    return;
+  }
+  mainWindow?.webContents.send("desktop:end-live");
+  setTimeout(finish, QUIT_GRACE_MS);
+}
+
 function registerIpc(): void {
+  ipcMain.on("desktop:set-live", (event, live: unknown) => {
+    if (!isTrustedSender(event)) return;
+    isLive = live === true;
+    appTray?.setLive(isLive);
+  });
+
+  ipcMain.on("desktop:notify", (event, title: unknown, body: unknown) => {
+    if (!isTrustedSender(event) || !isNotification(title, body) || !Notification.isSupported()) return;
+    const notification = new Notification({ title: title as string, body: body as string });
+    notification.on("click", showMainWindow);
+    notification.show();
+  });
+
   ipcMain.on("desktop:window", (event, action: unknown) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     if (!window || !isTrustedSender(event)) return;
@@ -196,16 +250,22 @@ async function exchangeLoginCode(code: string): Promise<DesktopLoginResponse> {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
+  app.on("second-instance", showMainWindow);
+  app.on("before-quit", () => {
+    isQuitting = true;
   });
+
+  // Groups notifications under the app's name instead of "electron.app.Electron".
+  app.setAppUserModelId(APP_USER_MODEL_ID);
 
   void app.whenReady().then(() => {
     registerIpc();
     installDisplayMediaHandler();
+    appTray = createAppTray({
+      open: showMainWindow,
+      endLive: () => mainWindow?.webContents.send("desktop:end-live"),
+      quit: quitApp,
+    });
     mainWindow = createMainWindow();
   });
 
