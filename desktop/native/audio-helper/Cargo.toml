@@ -1,0 +1,8 @@
+[package]
+name = "audio-helper"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+wasapi = "0.26.0"

@@ -11,7 +11,8 @@
     "dev": "npm run build && node scripts/start.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "icon": "node scripts/make-icon.cjs",
-    "dist": "npm run build && npm run icon && electron-builder --win nsis --publish never"
+    "dist": "npm run build && npm run icon && npm run audio-helper && electron-builder --win nsis --publish never",
+    "audio-helper": "node scripts/build-audio-helper.cjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"
@@ -49,6 +50,12 @@
       "owner": "IagoFreire",
       "repo": "share-screen",
       "releaseType": "release"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "native/audio-helper/target/release/audio-helper.exe",
+        "to": "audio-helper.exe"
+      }
+    ]
   }
 }
