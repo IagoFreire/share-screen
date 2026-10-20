@@ -84,6 +84,8 @@ export default defineConfig({
         main: path.resolve(clientRoot, "index.html"),
         present: path.resolve(clientRoot, "present.html"),
         watch: path.resolve(clientRoot, "watch.html"),
+        // desktop.html: loaded by the Windows desktop app (desktop/) into its own window.
+        desktop: path.resolve(clientRoot, "desktop.html"),
       },
     },
   },
