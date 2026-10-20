@@ -29,6 +29,7 @@ import {
   ICON_VOLUME,
 } from "./icons.js";
 import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } from "./broadcastsPanel.js";
+import { createQualityMenu, type QualityChoice } from "./qualityMenu.js";
 
 /**
  * Lockout after the "ao vivo" button: every click makes the presenter send a keyframe,
@@ -187,8 +188,19 @@ export function mountApp(options: MountAppOptions): void {
   const hasPresenter = () => streams.length > 0;
   const audioParamsForSelection = () => currentStream()?.audio ?? null;
 
+  /** Simulcast (broadcasts from the desktop app): the viewer's pick and what is being sent. */
+  let layerChoice: QualityChoice = "auto";
+  let currentLayer = 0;
+  const qualityMenu = createQualityMenu((choice) => {
+    layerChoice = choice;
+    wsClient.sendControl({ kind: "select-layer", layer: choice });
+    render();
+  });
+  liveButton.before(qualityMenu.element);
+
   /** Single place that reflects presenter state into the button, status line and idle screen. */
   function render(): void {
+    qualityMenu.update(isWatchingSelf() ? undefined : currentStream()?.layers, layerChoice, currentLayer);
     const presenting = isPresenting();
 
     shareButton.innerHTML = presenting
@@ -361,11 +373,19 @@ export function mountApp(options: MountAppOptions): void {
         // The server always starts a fresh connection with video enabled -- tell it
         // about a still-active local preference carried over from before this (re)join.
         if (videoDisabled) wsClient.sendControl({ kind: "set-video-enabled", enabled: false });
+        // Same for a fixed quality choice: a fresh connection starts on "auto".
+        currentLayer = 0;
+        if (layerChoice !== "auto") wsClient.sendControl({ kind: "select-layer", layer: layerChoice });
         wsClient.sendControl({ kind: "request-keyframe" });
         return;
 
       case "viewer-count":
         viewerCount = message.count;
+        render();
+        return;
+
+      case "layer-changed":
+        currentLayer = message.layer;
         render();
         return;
 

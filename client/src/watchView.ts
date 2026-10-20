@@ -24,6 +24,7 @@ import {
   ICON_VOLUME,
 } from "./ui/icons.js";
 import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } from "./ui/broadcastsPanel.js";
+import { createQualityMenu, type QualityChoice } from "./ui/qualityMenu.js";
 
 /** Lockout after the "ao vivo" button -- see App.ts. */
 const JUMP_TO_LIVE_COOLDOWN_MS = 1500;
@@ -126,6 +127,16 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   const liveButton = root.querySelector<HTMLButtonElement>("#live-btn")!;
   const broadcastsButton = root.querySelector<HTMLButtonElement>("#broadcasts-btn")!;
 
+  /** Simulcast: what the viewer picked, and the layer the relay is actually sending. */
+  let layerChoice: QualityChoice = "auto";
+  let currentLayer = 0;
+  const qualityMenu = createQualityMenu((choice) => {
+    layerChoice = choice;
+    wsClient.sendControl({ kind: "select-layer", layer: choice });
+    render();
+  });
+  liveButton.before(qualityMenu.element);
+
   // Same list as in the Activity (see ui/broadcastsPanel.ts). Everything it reads is
   // looked up lazily, so it can be built before the state and socket declared below.
   const broadcastsPanel = createBroadcastsPanel({
@@ -179,6 +190,9 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   const audioParamsForSelection = () => currentStream()?.audio ?? null;
 
   function render(): void {
+    // Your own broadcast isn't decoded back with a choice of versions; hide the picker.
+    qualityMenu.update(isSelf() ? undefined : currentStream()?.layers, layerChoice, currentLayer);
+
     if (streams.length > 1) {
       statusText.textContent = `${streams.length} transmissões — ${viewerCount} espectador(es).`;
     } else if (hasPresenter()) {
@@ -426,11 +440,19 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
         // The server always starts a fresh connection with video enabled -- tell it
         // about a still-active local preference carried over from before this (re)join.
         if (videoDisabled) wsClient.sendControl({ kind: "set-video-enabled", enabled: false });
+        // Same for a fixed quality choice: a fresh connection starts on "auto".
+        currentLayer = 0;
+        if (layerChoice !== "auto") wsClient.sendControl({ kind: "select-layer", layer: layerChoice });
         wsClient.sendControl({ kind: "request-keyframe" });
         return;
 
       case "viewer-count":
         viewerCount = message.count;
+        render();
+        return;
+
+      case "layer-changed":
+        currentLayer = message.layer;
         render();
         return;
 
@@ -614,6 +636,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
       audioDecodePipeline?.stop();
       audioDecodePipeline = null;
       broadcastsPanel.close();
+      qualityMenu.close();
       document.removeEventListener("fullscreenchange", onFullscreenChange);
       document.removeEventListener("keydown", onKeydown);
       document.removeEventListener("visibilitychange", onVisibilityChange);
