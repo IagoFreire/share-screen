@@ -11,6 +11,7 @@ import {
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from "electron";
+import { autoUpdater } from "electron-updater";
 import type { DesktopLoginResponse, StoredLogin } from "@screenshare-bot/shared";
 import { LOGIN_TIMEOUT_MS, runLoopbackLogin } from "./auth/loopbackLogin";
 import { createSessionStore } from "./auth/sessionStore";
@@ -313,6 +314,11 @@ if (!app.requestSingleInstanceLock()) {
       endLive: () => mainWindow?.webContents.send("desktop:end-live"),
       quit: quitApp,
     });
+    // Installed copies update themselves from the GitHub Releases (see package.json
+    // "publish"); a dev run has no release feed to compare against.
+    if (app.isPackaged) {
+      autoUpdater.checkForUpdatesAndNotify().catch((error: unknown) => console.error("Update check failed:", error));
+    }
     mainWindow = createMainWindow();
   });
 

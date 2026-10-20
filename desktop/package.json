@@ -1,18 +1,54 @@
 {
   "name": "@screenshare-bot/desktop",
+  "productName": "ScreenShare",
   "version": "0.1.0",
   "private": true,
   "description": "ScreenShare desktop app for Windows",
+  "author": "Iago Freire",
   "main": "dist/main/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "npm run build && node scripts/start.cjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "icon": "node scripts/make-icon.cjs",
+    "dist": "npm run build && npm run icon && electron-builder --win nsis --publish never"
   },
   "dependencies": {
-    "@screenshare-bot/shared": "*"
+    "electron-updater": "^6.8.9"
   },
   "devDependencies": {
-    "electron": "^44.9.0"
+    "@screenshare-bot/shared": "*",
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "dev.iagofreire.screenshare",
+    "productName": "ScreenShare",
+    "electronVersion": "44.9.0",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "static/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "shortcutName": "ScreenShare",
+      "artifactName": "ScreenShare-Setup-${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "IagoFreire",
+      "repo": "share-screen",
+      "releaseType": "release"
+    }
   }
 }
