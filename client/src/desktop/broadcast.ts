@@ -31,7 +31,9 @@ export interface BroadcastOptions {
   wsUrl: string;
   userId: string;
   session: string;
-  selectSource(id: string): Promise<void>;
+  /** False makes a silent live: Electron then grants the capture without audio. */
+  audio: boolean;
+  selectSource(id: string, options: { audio: boolean }): Promise<void>;
   onViewerCount(count: number): void;
   /** Someone used "bater na porta" on this broadcast. */
   onAlert(): void;
@@ -59,7 +61,7 @@ export async function startDesktopBroadcast(
   options: BroadcastOptions,
   factories: BroadcastFactories = DEFAULT_FACTORIES,
 ): Promise<BroadcastHandle> {
-  await options.selectSource(sourceId);
+  await options.selectSource(sourceId, { audio: options.audio });
 
   let onControl: (message: ControlMessage) => void = () => {};
   let onClose: () => void = () => {};

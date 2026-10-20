@@ -25,8 +25,8 @@ function setup(answers: boolean[] = []) {
     },
   };
   const deps: LiveControllerDeps = {
-    startBroadcast: async (sourceId, quality, target) => {
-      calls.push(`start ${sourceId} ${quality.height}p ${target.roomId}`);
+    startBroadcast: async (sourceId, quality, target, audio) => {
+      calls.push(`start ${sourceId} ${quality.height}p ${target.roomId}${audio ? "" : " mute"}`);
       return handle;
     },
     setLive: (live) => liveStates.push(live),
@@ -54,6 +54,14 @@ describe("live controller", () => {
     expect(calls).toEqual(["start screen:0:0 1080p c1"]);
     expect(controller.isLive).toBe(true);
     expect(liveStates).toEqual([true]);
+  });
+
+  it("passes the choice to broadcast without sound", async () => {
+    const { controller, calls } = setup();
+
+    await controller.goLive("screen:0:0", QUALITY, TARGET, false);
+
+    expect(calls).toEqual(["start screen:0:0 1080p c1 mute"]);
   });
 
   it("end stops the broadcast and clears live", async () => {

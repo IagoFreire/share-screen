@@ -43,6 +43,7 @@ function setup() {
     wsUrl: "ws://relay/ws",
     userId: "42",
     session: "signed",
+    audio: true,
     selectSource: async () => {},
     onViewerCount: () => {},
     onAlert: () => {},

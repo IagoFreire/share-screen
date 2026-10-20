@@ -23,8 +23,8 @@ export interface StoredLogin {
 
 export interface DesktopApi {
   getSources(): Promise<DesktopSource[]>;
-  /** Applies to the NEXT getDisplayMedia() call only. */
-  selectSource(id: string): Promise<void>;
+  /** Applies to the NEXT getDisplayMedia() call only. `audio: false` makes a silent live. */
+  selectSource(id: string, options?: { audio: boolean }): Promise<void>;
   /** Rejects with an Error whose message is ready to show (pt-BR). */
   login(): Promise<StoredLogin>;
   /** Gives up on a login still waiting for the browser; the pending login() rejects. */

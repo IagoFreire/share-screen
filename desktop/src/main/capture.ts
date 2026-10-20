@@ -35,33 +35,41 @@ export function toDesktopSource(source: CapturerSourceLike): DesktopSource {
   };
 }
 
+/** What the transmit modal picked: which source, and whether the live carries sound. */
+export interface SourcePick {
+  id: string;
+  audio: boolean;
+}
+
 /**
  * The source the page picked, consumed by the next display-media request. One use only:
  * a stale pick must never silently grant a later, unrelated getDisplayMedia() call.
  */
-export function createSourceSelection(): { set(id: string): void; take(): string | null } {
-  let selected: string | null = null;
+export function createSourceSelection(): { set(pick: SourcePick): void; take(): SourcePick | null } {
+  let selected: SourcePick | null = null;
   return {
-    set(id) {
-      selected = id;
+    set(pick) {
+      selected = pick;
     },
     take() {
-      const id = selected;
+      const pick = selected;
       selected = null;
-      return id;
+      return pick;
     },
   };
 }
 
 /**
- * What to grant a display-media request: the picked source with system audio, or null
- * to deny. Plan 2 replaces "loopback" (the whole system mix) with per-app audio.
+ * What to grant a display-media request: the picked source -- with system audio unless
+ * the user chose a silent live -- or null to deny. Plan 2 replaces "loopback" (the whole
+ * system mix) with per-app audio.
  */
 export function pickDisplayMedia<S extends { id: string }>(
-  selectedId: string | null,
+  pick: SourcePick | null,
   sources: S[],
-): { video: S; audio: "loopback" } | null {
-  if (!selectedId) return null;
-  const video = sources.find((source) => source.id === selectedId);
-  return video ? { video, audio: "loopback" } : null;
+): { video: S; audio?: "loopback" } | null {
+  if (!pick) return null;
+  const video = sources.find((source) => source.id === pick.id);
+  if (!video) return null;
+  return pick.audio ? { video, audio: "loopback" } : { video };
 }

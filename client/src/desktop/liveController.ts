@@ -21,7 +21,13 @@ export interface BroadcastTarget {
 }
 
 export interface LiveControllerDeps {
-  startBroadcast(sourceId: string, quality: QualityPreset, target: BroadcastTarget): Promise<BroadcastHandle>;
+  /** `audio: false` is a silent live (the user turned "som do computador" off). */
+  startBroadcast(
+    sourceId: string,
+    quality: QualityPreset,
+    target: BroadcastTarget,
+    audio: boolean,
+  ): Promise<BroadcastHandle>;
   setLive(live: boolean): void;
   /** Asked when the user leaves the channel they're broadcasting to; true ends the live. */
   confirmLeave(): Promise<boolean>;
@@ -29,7 +35,7 @@ export interface LiveControllerDeps {
 
 export interface LiveController {
   readonly isLive: boolean;
-  goLive(sourceId: string, quality: QualityPreset, target: BroadcastTarget): Promise<void>;
+  goLive(sourceId: string, quality: QualityPreset, target: BroadcastTarget, audio?: boolean): Promise<void>;
   end(): void;
   onVoiceState(state: VoiceState): Promise<void>;
   /** Notified whenever isLive flips, so the UI can redraw. */
@@ -63,9 +69,9 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       return broadcast !== null;
     },
 
-    async goLive(sourceId, quality, nextTarget) {
+    async goLive(sourceId, quality, nextTarget, audio = true) {
       if (broadcast) return;
-      const handle = await deps.startBroadcast(sourceId, quality, nextTarget);
+      const handle = await deps.startBroadcast(sourceId, quality, nextTarget, audio);
       broadcast = handle;
       target = nextTarget;
       askedAboutLeaving = false;

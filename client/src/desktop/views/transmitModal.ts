@@ -65,13 +65,33 @@ function uploadEstimate(quality: QualityPreset): string {
   return `~${mbps.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} Mbps de upload por espectador`;
 }
 
+/** Remembers whether the last live carried sound. */
+const AUDIO_STORAGE_KEY = "screenshare-bot:desktop-audio";
+
+function loadAudioChoice(): boolean {
+  try {
+    return localStorage.getItem(AUDIO_STORAGE_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+function saveAudioChoice(audio: boolean): void {
+  try {
+    localStorage.setItem(AUDIO_STORAGE_KEY, audio ? "on" : "off");
+  } catch {
+    // Storage unavailable: the choice just isn't remembered.
+  }
+}
+
 export interface TransmitModalOptions {
   channelName: string;
-  onGoLive(sourceId: string, quality: QualityPreset): Promise<void>;
+  onGoLive(sourceId: string, quality: QualityPreset, audio: boolean): Promise<void>;
 }
 
 export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions): void {
   let choice = loadChoice();
+  let audio = loadAudioChoice();
   let sources: DesktopSource[] = [];
   let tab: DesktopSource["kind"] = "screen";
   let selectedId: string | null = null;
@@ -80,6 +100,7 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
   const grid = h("div", { class: "desk-src-grid", role: "listbox", "aria-label": "Fontes de captura" });
   const tabs = h("div", { class: "desk-tabs", role: "tablist" });
   const qualityBox = h("div", { class: "desk-quality" });
+  const audioBox = h("div", { class: "desk-audio" });
   const estimate = h("p", { class: "desk-estimate" });
   const error = h("p", { class: "desk-modal-error", role: "alert" });
   const goLiveButton = h("button", { class: "desk-btn-primary", type: "button" }, "Entrar ao vivo");
@@ -109,17 +130,7 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
         qualityBox,
         estimate,
         h("p", { class: "desk-label" }, "Áudio da live"),
-        h(
-          "div",
-          { class: "desk-audio-row" },
-          icon(ICONS.speaker, "desk-audio-icon"),
-          h(
-            "span",
-            { class: "desk-audio-text" },
-            h("strong", {}, "Som do computador"),
-            h("small", {}, "Inclui tudo o que toca no PC, inclusive o Discord. Escolher apps vem na próxima versão."),
-          ),
-        ),
+        audioBox,
       ),
     ),
     h("footer", { class: "desk-modal-foot" }, error, h("span", { class: "desk-spacer" }), cancelButton, goLiveButton),
@@ -158,6 +169,45 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
       h("div", { class: "desk-chips" }, ...BITRATE_OPTIONS.map((b) => chip(b.label, b.key, choice.bitrate, (bitrate) => setChoice({ bitrate })))),
     );
     estimate.textContent = uploadEstimate(buildQualityPreset(choice.resolution, choice.fps, choice.bitrate));
+  }
+
+  function renderAudio(): void {
+    const toggle = h(
+      "button",
+      {
+        class: `desk-switch${audio ? " is-on" : ""}`,
+        type: "button",
+        role: "switch",
+        "aria-checked": audio ? "true" : "false",
+        "aria-label": "Transmitir o som do computador",
+        onClick: () => {
+          audio = !audio;
+          saveAudioChoice(audio);
+          renderAudio();
+        },
+      },
+      h("span", { class: "desk-switch-knob" }),
+    );
+    audioBox.replaceChildren(
+      h(
+        "div",
+        { class: `desk-audio-row${audio ? "" : " is-muted"}` },
+        icon(ICONS.speaker, "desk-audio-icon"),
+        h(
+          "span",
+          { class: "desk-audio-text" },
+          h("strong", {}, "Som do computador"),
+          h(
+            "small",
+            {},
+            audio
+              ? "Inclui tudo o que toca no PC, inclusive o Discord. Escolher apps vem na próxima versão."
+              : "Desligado: a live vai sem som.",
+          ),
+        ),
+        toggle,
+      ),
+    );
   }
 
   function renderTabs(): void {
@@ -226,7 +276,7 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
     error.textContent = "";
     syncGoLive();
     options
-      .onGoLive(selectedId, buildQualityPreset(choice.resolution, choice.fps, choice.bitrate))
+      .onGoLive(selectedId, buildQualityPreset(choice.resolution, choice.fps, choice.bitrate), audio)
       .then(close)
       .catch((reason: unknown) => {
         busy = false;
@@ -243,6 +293,7 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
   renderTabs();
   renderSources();
   renderQuality();
+  renderAudio();
   syncGoLive();
   document.body.append(backdrop);
   goLiveButton.focus();

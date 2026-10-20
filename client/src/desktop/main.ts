@@ -34,12 +34,13 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
   }
 
   const live = createLiveController({
-    startBroadcast: (sourceId, quality, target) =>
+    startBroadcast: (sourceId, quality, target, audio) =>
       startDesktopBroadcast(sourceId, quality, target, {
         wsUrl: relayWsUrl(),
         userId: login.user.id,
         session: login.session,
-        selectSource: (id) => api.selectSource(id),
+        audio,
+        selectSource: (id, options) => api.selectSource(id, options),
         onViewerCount: (count) => {
           viewerCount = count;
           app?.refreshUserPanel();
@@ -68,7 +69,7 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
       const { channelId, guildId, channelName } = voice.location;
       openTransmitModal(api, {
         channelName: channelName ?? "canal de voz",
-        onGoLive: (sourceId, quality) => live.goLive(sourceId, quality, { roomId: channelId, guildId }),
+        onGoLive: (sourceId, quality, audio) => live.goLive(sourceId, quality, { roomId: channelId, guildId }, audio),
       });
     },
     isLive: () => live.isLive,

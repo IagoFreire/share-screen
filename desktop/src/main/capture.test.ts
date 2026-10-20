@@ -39,9 +39,9 @@ describe("toDesktopSource", () => {
 describe("source selection", () => {
   it("a selection is used once", () => {
     const selection = createSourceSelection();
-    selection.set("screen:0:0");
+    selection.set({ id: "screen:0:0", audio: true });
 
-    expect(selection.take()).toBe("screen:0:0");
+    expect(selection.take()).toEqual({ id: "screen:0:0", audio: true });
     expect(selection.take()).toBeNull();
   });
 
@@ -59,10 +59,17 @@ describe("pickDisplayMedia", () => {
   });
 
   it("a selection that no longer exists denies the request", () => {
-    expect(pickDisplayMedia("window:9999:0", [SCREEN, WINDOW])).toBeNull();
+    expect(pickDisplayMedia({ id: "window:9999:0", audio: true }, [SCREEN, WINDOW])).toBeNull();
   });
 
   it("grants the selected source with system audio", () => {
-    expect(pickDisplayMedia("window:1234:0", [SCREEN, WINDOW])).toEqual({ video: WINDOW, audio: "loopback" });
+    expect(pickDisplayMedia({ id: "window:1234:0", audio: true }, [SCREEN, WINDOW])).toEqual({
+      video: WINDOW,
+      audio: "loopback",
+    });
+  });
+
+  it("grants video only when the user chose to broadcast without sound", () => {
+    expect(pickDisplayMedia({ id: "window:1234:0", audio: false }, [SCREEN, WINDOW])).toEqual({ video: WINDOW });
   });
 });

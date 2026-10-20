@@ -963,6 +963,48 @@ body.desktop :focus-visible {
   height: 20px;
 }
 
+.desk-audio-row.is-muted .desk-audio-icon {
+  color: var(--desk-text-dim);
+}
+
+.desk-audio-text {
+  flex: 1 1 auto;
+}
+
+/* Discord-style switch: green and knob right when on. */
+.desk-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 24px;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: var(--desk-text-dim);
+  cursor: pointer;
+  transition: background-color var(--desk-normal) linear;
+}
+
+.desk-switch.is-on {
+  background: var(--desk-green);
+}
+
+.desk-switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform var(--desk-normal) var(--desk-ease);
+}
+
+.desk-switch.is-on .desk-switch-knob {
+  transform: translateX(16px);
+}
+
 .desk-audio-text {
   display: flex;
   flex-direction: column;

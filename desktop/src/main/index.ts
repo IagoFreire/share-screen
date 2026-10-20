@@ -62,14 +62,14 @@ function assertTrustedSender(event: IpcMainInvokeEvent): void {
  */
 function installDisplayMediaHandler(): void {
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
-    const selectedId = sourceSelection.take();
+    const pick = sourceSelection.take();
     if (!isAllowedNavigation(request.frame?.url ?? "", serverOrigin)) {
       callback({});
       return;
     }
     desktopCapturer
       .getSources({ types: ["screen", "window"] })
-      .then((sources) => callback(pickDisplayMedia(selectedId, sources) ?? {}))
+      .then((sources) => callback(pickDisplayMedia(pick, sources) ?? {}))
       .catch((error: unknown) => {
         console.error("Listing capture sources failed:", error);
         callback({});
@@ -214,10 +214,11 @@ function registerIpc(): void {
     return sources.map(toDesktopSource);
   });
 
-  ipcMain.handle("desktop:select-source", async (event, id: unknown) => {
+  ipcMain.handle("desktop:select-source", async (event, id: unknown, audio: unknown) => {
     assertTrustedSender(event);
     if (!isSourceId(id)) throw new Error("Fonte de captura inválida.");
-    sourceSelection.set(id);
+    // Anything but an explicit false keeps the default: broadcast with sound.
+    sourceSelection.set({ id, audio: audio !== false });
   });
 
   const sessionStore = createSessionStore({
