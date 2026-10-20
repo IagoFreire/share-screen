@@ -26,7 +26,11 @@ export interface PresenterSessionDeps {
 
 export interface PresenterSession {
   readonly isPresenting: boolean;
-  start(quality: QualityPreset): Promise<{ hasAudio: boolean }>;
+  /**
+   * `layers` (simulcast, desktop app only) is the full plan with `quality` first -- see
+   * planLayers(). One encoder runs per layer; omitted or single-entry means one version.
+   */
+  start(quality: QualityPreset, layers?: QualityPreset[]): Promise<{ hasAudio: boolean }>;
   /** Idempotent; tells the relay only if a broadcast was actually live. */
   stop(): void;
   /** Handles presenting-started, request-keyframe and request-stop-presenting; false otherwise. */
@@ -57,16 +61,20 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
   let isPresenting = false;
   /** Assigned by the relay in presenting-started; SLOT_PRESENTER until then. */
   let slot = SLOT_PRESENTER;
-  let videoClock = 0;
   let audioClock = 0;
-  let video: VideoEncodePipeline | null = null;
+  /** One encoder per simulcast layer, index = layer (0 = best). */
+  let videos: VideoEncodePipeline[] = [];
+  /** Downscaled clones feeding the lower layers; ours to stop. */
+  let layerTracks: MediaStreamTrack[] = [];
   let audio: AudioEncodePipeline | null = null;
   const endedListeners: Array<() => void> = [];
 
   function stop(): void {
     if (!isPresenting) return;
-    video?.stop();
-    video = null;
+    for (const pipeline of videos) pipeline.stop();
+    videos = [];
+    for (const track of layerTracks) track.stop();
+    layerTracks = [];
     audio?.stop();
     audio = null;
     isPresenting = false;
@@ -84,26 +92,43 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
       return isPresenting;
     },
 
-    async start(quality) {
+    async start(quality, layers) {
       const { videoTrack, audioTrack } = await deps.capture(quality);
+      const plan = layers && layers.length > 1 ? layers : [quality];
+      const simulcast = plan.length > 1;
 
-      video = await deps.startVideo(
-        videoTrack,
-        (chunk) => {
-          videoClock += 1;
-          deps.sendFrame(
-            {
-              slot,
-              type: FrameType.Video,
-              timestamp: chunk.timestamp / MICROSECONDS_PER_MILLISECOND,
-              clock: videoClock,
-              keyFrame: chunk.type === "key",
+      for (const [layer, preset] of plan.entries()) {
+        let track = videoTrack;
+        if (layer > 0) {
+          // Chromium scales and drops frames on a clone for us, so each encoder receives
+          // frames at its own size and rate from the one capture.
+          track = videoTrack.clone();
+          await track.applyConstraints({ height: { ideal: preset.height }, frameRate: { ideal: preset.framerate } });
+          layerTracks.push(track);
+        }
+        // Per-layer sequence numbers: a viewer only ever receives one layer.
+        let clock = 0;
+        videos.push(
+          await deps.startVideo(
+            track,
+            (chunk) => {
+              clock += 1;
+              deps.sendFrame(
+                {
+                  slot,
+                  type: FrameType.Video,
+                  timestamp: chunk.timestamp / MICROSECONDS_PER_MILLISECOND,
+                  clock,
+                  keyFrame: chunk.type === "key",
+                  ...(simulcast ? { layer } : {}),
+                },
+                copyChunk(chunk),
+              );
             },
-            copyChunk(chunk),
-          );
-        },
-        { quality },
-      );
+            { quality: preset },
+          ),
+        );
+      }
 
       if (audioTrack) {
         audio = await deps.startAudio(audioTrack, (chunk) => {
@@ -117,7 +142,14 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
 
       videoTrack.addEventListener("ended", endOnItsOwn);
 
-      deps.sendControl({ kind: "start-presenting", presenterId: deps.presenterId, audio: audio?.params ?? null });
+      deps.sendControl({
+        kind: "start-presenting",
+        presenterId: deps.presenterId,
+        audio: audio?.params ?? null,
+        ...(simulcast
+          ? { layers: plan.map((preset, layer) => ({ layer, height: preset.height, framerate: preset.framerate })) }
+          : {}),
+      });
       isPresenting = true;
       return { hasAudio: audioTrack !== null };
     },
@@ -130,7 +162,9 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
           slot = message.slot;
           return true;
         case "request-keyframe":
-          video?.requestKeyframe();
+          // The relay names the layer a viewer is switching to; without one, refresh all.
+          if (message.layer === undefined) for (const pipeline of videos) pipeline.requestKeyframe();
+          else videos[message.layer]?.requestKeyframe();
           return true;
         case "request-stop-presenting":
           endOnItsOwn();

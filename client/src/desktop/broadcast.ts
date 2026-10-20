@@ -1,4 +1,4 @@
-import type { ControlMessage, QualityPreset } from "@screenshare-bot/shared";
+import { planLayers, type ControlMessage, type QualityPreset } from "@screenshare-bot/shared";
 import { startAudioEncodePipeline } from "../capture/audioEncodePipeline.js";
 import { startScreenCapture } from "../capture/screenCapture.js";
 import { startVideoEncodePipeline } from "../capture/videoEncodePipeline.js";
@@ -152,7 +152,8 @@ export async function startDesktopBroadcast(
   };
 
   try {
-    await session.start(quality);
+    // Simulcast: viewers pick (or "auto" picks) among these versions.
+    await session.start(quality, planLayers(quality));
   } catch (error) {
     console.error("Desktop broadcast failed to start:", error);
     appAudioTrack.current?.stop();

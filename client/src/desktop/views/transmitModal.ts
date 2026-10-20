@@ -1,5 +1,6 @@
 import {
   buildQualityPreset,
+  planLayers,
   TARGET_AUDIO_BITRATE_KBPS_DEFAULT,
   type AudioApp,
   type BitrateLevelKey,
@@ -62,9 +63,17 @@ function saveChoice(choice: QualityChoice): void {
   }
 }
 
+/** Upload for every simulcast version together, and which versions viewers can pick. */
 function uploadEstimate(quality: QualityPreset): string {
-  const mbps = (quality.bitrateKbps + TARGET_AUDIO_BITRATE_KBPS_DEFAULT) / 1000;
-  return `~${mbps.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} Mbps de upload por espectador`;
+  const layers = planLayers(quality);
+  const totalKbps = layers.reduce((sum, layer) => sum + layer.bitrateKbps, TARGET_AUDIO_BITRATE_KBPS_DEFAULT);
+  const mbps = (totalKbps / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 });
+  const versions = layers.map((layer) => `${layer.height}p${layer.framerate}`);
+  const choice =
+    versions.length > 1
+      ? `quem assiste escolhe entre ${versions.slice(0, -1).join(", ")} e ${versions[versions.length - 1]}`
+      : "uma versão só";
+  return `~${mbps} Mbps de upload · ${choice}`;
 }
 
 /** Remembers whether the last live carried sound. */

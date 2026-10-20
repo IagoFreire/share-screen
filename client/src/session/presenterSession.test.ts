@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildQualityPreset,
+  planLayers,
   FrameType,
   type ControlMessage,
   type FrameHeader,
@@ -160,5 +161,108 @@ describe("presenter session", () => {
   it("ignores control messages that aren't presenter business", () => {
     const { session } = setup();
     expect(session.handleControl({ kind: "viewer-count", count: 2 })).toBe(false);
+  });
+});
+
+describe("presenter session simulcast", () => {
+  const LAYERS = planLayers(buildQualityPreset("1080p", 60, "balanced"));
+
+  function simulcastSetup() {
+    const clones: Array<{ constraints: MediaTrackConstraints | null; stopped: boolean }> = [];
+    const captured = {
+      addEventListener: () => {},
+      clone: () => {
+        const clone = { constraints: null as MediaTrackConstraints | null, stopped: false };
+        clones.push(clone);
+        return {
+          applyConstraints: async (constraints: MediaTrackConstraints) => {
+            clone.constraints = constraints;
+          },
+          stop: () => {
+            clone.stopped = true;
+          },
+        } as unknown as MediaStreamTrack;
+      },
+    } as unknown as MediaStreamTrack;
+    const emitters: Array<(chunk: ReturnType<typeof fakeChunk>) => void> = [];
+    const keyframes: number[] = [];
+    const frames: FrameHeader[] = [];
+    const controls: ControlMessage[] = [];
+
+    const session = createPresenterSession({
+      sendFrame: (header) => frames.push(header),
+      sendControl: (message) => controls.push(message),
+      capture: async () => ({ stream: {} as MediaStream, videoTrack: captured, audioTrack: null }),
+      startVideo: async (_track, onChunk) => {
+        const index = emitters.length;
+        emitters.push((chunk) => onChunk(chunk as unknown as EncodedVideoChunk));
+        keyframes.push(0);
+        return {
+          requestKeyframe: () => {
+            keyframes[index] += 1;
+          },
+          stop: () => {},
+        };
+      },
+      startAudio: async () => ({ params: { sampleRate: 48000, channels: 2 }, stop: () => {} }),
+      presenterId: "42",
+    });
+    return { session, clones, emitters, keyframes, frames, controls };
+  }
+
+  it("encodes one version per layer, each tagged with its layer and its own clock", async () => {
+    const { session, emitters, frames } = simulcastSetup();
+    await session.start(LAYERS[0], LAYERS);
+
+    emitters[2](fakeChunk([1], 1000, "key"));
+    emitters[0](fakeChunk([2], 1000, "key"));
+
+    expect(emitters).toHaveLength(3);
+    expect(frames.map((frame) => [frame.layer, frame.clock])).toEqual([
+      [2, 1],
+      [0, 1],
+    ]);
+  });
+
+  it("scales the lower layers down from clones of the capture", async () => {
+    const { session, clones } = simulcastSetup();
+    await session.start(LAYERS[0], LAYERS);
+
+    expect(clones.map((clone) => clone.constraints)).toEqual([
+      { height: { ideal: 720 }, frameRate: { ideal: 30 } },
+      { height: { ideal: 480 }, frameRate: { ideal: 30 } },
+    ]);
+  });
+
+  it("announces its layers when going live", async () => {
+    const { session, controls } = simulcastSetup();
+    await session.start(LAYERS[0], LAYERS);
+
+    expect(controls[0]).toMatchObject({
+      kind: "start-presenting",
+      layers: [
+        { layer: 0, height: 1080, framerate: 60 },
+        { layer: 1, height: 720, framerate: 30 },
+        { layer: 2, height: 480, framerate: 30 },
+      ],
+    });
+  });
+
+  it("a keyframe request for one layer only reaches that encoder", async () => {
+    const { session, keyframes } = simulcastSetup();
+    await session.start(LAYERS[0], LAYERS);
+
+    session.handleControl({ kind: "request-keyframe", layer: 1 });
+
+    expect(keyframes).toEqual([0, 1, 0]);
+  });
+
+  it("stopping also stops the cloned tracks", async () => {
+    const { session, clones } = simulcastSetup();
+    await session.start(LAYERS[0], LAYERS);
+
+    session.stop();
+
+    expect(clones.every((clone) => clone.stopped)).toBe(true);
   });
 });
