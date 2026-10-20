@@ -151,6 +151,24 @@ export async function startVideoDecodePipeline(
     }
   }
 
+  /**
+   * Closes every due frame except the newest, without waiting for a paint.
+   *
+   * presentFrames() does the same, but only when an animation frame runs -- and none run
+   * while the window is minimized or covered by another app. Held VideoFrames are the
+   * hardware decoder's own output surfaces: with dozens parked here it runs out and
+   * stops decoding, every chunk arriving meanwhile piles up inside it, and once visible
+   * again that backlog plays out at roughly real time, leaving the live seconds behind.
+   */
+  function dropOverdueFrames(): void {
+    if (queue.length < 2) return;
+    const dueUpToUs = dueThresholdUs();
+    while (queue.length > 1 && queue[1]!.timestampUs <= dueUpToUs) {
+      queue.shift()!.frame.close();
+      droppedFrames += 1;
+    }
+  }
+
   const decoder = new VideoDecoder({
     output: (frame) => {
       if (stopped) {
@@ -178,6 +196,8 @@ export async function startVideoDecodePipeline(
         // The buffer overflowed, so the clock mapping is stale; re-prime it.
         baseTimestampUs = null;
       }
+
+      dropOverdueFrames();
     },
     error: (error) => {
       console.error("VideoDecoder error:", error);
