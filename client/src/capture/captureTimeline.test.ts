@@ -42,6 +42,15 @@ describe("createCaptureTimeline", () => {
     expect(timeline.next(BLOCK)).toBe(10_000);
   });
 
+  it("moves every stamp onto another clock by the given offset", () => {
+    const timeline = createCaptureTimeline(RATE, 5_000_000);
+    timeline.record(0, BLOCK);
+    timeline.record(10_000, BLOCK);
+
+    expect(timeline.next(BLOCK)).toBe(5_000_000);
+    expect(timeline.next(BLOCK)).toBe(5_010_000);
+  });
+
   it("returns null before any input was recorded", () => {
     expect(createCaptureTimeline(RATE).next(CHUNK)).toBeNull();
   });

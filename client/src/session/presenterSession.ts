@@ -21,6 +21,8 @@ export interface PresenterSessionDeps {
   capture(quality: QualityPreset): Promise<CaptureStreams>;
   startVideo: typeof startVideoEncodePipeline;
   startAudio: typeof startAudioEncodePipeline;
+  /** How far to shift the audio onto the video's clock (see capture/clockOffset.ts); 0 when absent. */
+  measureAudioRebaseUs?(videoTrack: MediaStreamTrack, audioTrack: MediaStreamTrack): Promise<number>;
   presenterId: string | null;
 }
 
@@ -131,13 +133,18 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
       }
 
       if (audioTrack) {
-        audio = await deps.startAudio(audioTrack, (chunk) => {
-          audioClock += 1;
-          deps.sendFrame(
-            { slot, type: FrameType.Audio, timestamp: chunk.timestamp / MICROSECONDS_PER_MILLISECOND, clock: audioClock },
-            copyChunk(chunk),
-          );
-        });
+        const timestampOffsetUs = (await deps.measureAudioRebaseUs?.(videoTrack, audioTrack)) ?? 0;
+        audio = await deps.startAudio(
+          audioTrack,
+          (chunk) => {
+            audioClock += 1;
+            deps.sendFrame(
+              { slot, type: FrameType.Audio, timestamp: chunk.timestamp / MICROSECONDS_PER_MILLISECOND, clock: audioClock },
+              copyChunk(chunk),
+            );
+          },
+          { timestampOffsetUs },
+        );
       }
 
       videoTrack.addEventListener("ended", endOnItsOwn);

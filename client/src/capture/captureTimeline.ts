@@ -25,7 +25,8 @@ interface Block {
   frames: number;
 }
 
-export function createCaptureTimeline(sampleRate: number): CaptureTimeline {
+/** `offsetUs` moves every stamp onto another clock (see clockOffset.ts). */
+export function createCaptureTimeline(sampleRate: number, offsetUs = 0): CaptureTimeline {
   const blocks: Block[] = [];
   /** Samples recorded so far. */
   let recorded = 0;
@@ -34,7 +35,7 @@ export function createCaptureTimeline(sampleRate: number): CaptureTimeline {
 
   return {
     record(timestampUs, frames) {
-      blocks.push({ start: recorded, timestampUs, frames });
+      blocks.push({ start: recorded, timestampUs: timestampUs + offsetUs, frames });
       recorded += frames;
     },
     next(frames) {

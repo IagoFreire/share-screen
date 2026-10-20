@@ -15,9 +15,15 @@ export interface AudioEncodePipeline {
  * Encodes the presenter's tab/system audio track as Opus via WebCodecs. Kept as a
  * plain track-processor pump (no jitter handling needed on the encode side).
  */
+export interface AudioEncodeOptions {
+  /** Added to every timestamp to put the audio on the video's clock (see clockOffset.ts). */
+  timestampOffsetUs?: number;
+}
+
 export async function startAudioEncodePipeline(
   track: MediaStreamTrack,
   onChunk: EncodedAudioHandler,
+  options: AudioEncodeOptions = {},
 ): Promise<AudioEncodePipeline> {
   const settings = track.getSettings();
   // Mirror the track exactly. Forcing stereo on a mono source (typical for Windows
@@ -52,7 +58,7 @@ export async function startAudioEncodePipeline(
   }
 
   // The encoder stamps packets by counting samples; put the real capture times back.
-  const timeline = createCaptureTimeline(params.sampleRate);
+  const timeline = createCaptureTimeline(params.sampleRate, options.timestampOffsetUs ?? 0);
   function restamp(chunk: EncodedAudioChunk): EncodedAudioChunk {
     const frames = Math.round(((chunk.duration ?? 0) * params.sampleRate) / 1_000_000);
     const timestamp = frames > 0 ? timeline.next(frames) : null;

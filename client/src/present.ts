@@ -17,6 +17,7 @@ import { WsClient } from "./net/wsClient.js";
 import { startScreenCapture } from "./capture/screenCapture.js";
 import { startVideoEncodePipeline } from "./capture/videoEncodePipeline.js";
 import { startAudioEncodePipeline } from "./capture/audioEncodePipeline.js";
+import { measureAudioRebaseUs } from "./capture/clockOffset.js";
 import { createPresenterSession } from "./session/presenterSession.js";
 
 /**
@@ -197,6 +198,7 @@ function main(): void {
     capture: startScreenCapture,
     startVideo: startVideoEncodePipeline,
     startAudio: startAudioEncodePipeline,
+    measureAudioRebaseUs,
     presenterId: getUserId(),
   });
   // The capture was closed from the browser's own "stop sharing" bar, or the user

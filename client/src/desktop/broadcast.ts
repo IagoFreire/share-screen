@@ -1,5 +1,6 @@
 import { planLayers, type ControlMessage, type QualityPreset } from "@screenshare-bot/shared";
 import { startAudioEncodePipeline } from "../capture/audioEncodePipeline.js";
+import { measureAudioRebaseUs, measureLoopbackAudioRebaseUs } from "../capture/clockOffset.js";
 import { startScreenCapture } from "../capture/screenCapture.js";
 import { startVideoEncodePipeline } from "../capture/videoEncodePipeline.js";
 import { WsClient, type WsClientHandlers } from "../net/wsClient.js";
@@ -126,6 +127,9 @@ export async function startDesktopBroadcast(
     },
     startVideo: startVideoEncodePipeline,
     startAudio: startAudioEncodePipeline,
+    // Chromium's loopback ("system") hears the mix before the speakers do; the helper's
+    // per-app audio is already stamped on the video's clock (see appAudio.ts).
+    measureAudioRebaseUs: audio.mode === "system" ? measureLoopbackAudioRebaseUs : measureAudioRebaseUs,
     presenterId: options.userId,
   });
 

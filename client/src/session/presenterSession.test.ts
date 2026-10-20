@@ -32,13 +32,14 @@ function fakeChunk(bytes: number[], timestampUs: number, type: "key" | "delta" =
   };
 }
 
-function setup(options: { withAudio?: boolean } = {}) {
+function setup(options: { withAudio?: boolean; audioRebaseUs?: number } = {}) {
   const video = fakeTrack();
   const frames: Array<{ header: FrameHeader; payload: Uint8Array }> = [];
   const controls: ControlMessage[] = [];
   let emitVideo: (chunk: ReturnType<typeof fakeChunk>) => void = () => {};
   let keyframeRequests = 0;
   let videoStops = 0;
+  let audioOptions: unknown;
 
   const deps: PresenterSessionDeps = {
     sendFrame: (header, payload) => frames.push({ header, payload }),
@@ -59,7 +60,11 @@ function setup(options: { withAudio?: boolean } = {}) {
         },
       };
     },
-    startAudio: async () => ({ params: { sampleRate: 48000, channels: 2 }, stop: () => {} }),
+    startAudio: async (_track, _onChunk, startOptions) => {
+      audioOptions = startOptions;
+      return { params: { sampleRate: 48000, channels: 2 }, stop: () => {} };
+    },
+    ...(options.audioRebaseUs === undefined ? {} : { measureAudioRebaseUs: async () => options.audioRebaseUs! }),
     presenterId: "42",
   };
 
@@ -71,6 +76,7 @@ function setup(options: { withAudio?: boolean } = {}) {
     emitVideo: (chunk: ReturnType<typeof fakeChunk>) => emitVideo(chunk),
     keyframeRequests: () => keyframeRequests,
     videoStops: () => videoStops,
+    audioOptions: () => audioOptions,
   };
 }
 
@@ -84,6 +90,22 @@ describe("presenter session", () => {
     expect(controls).toEqual([
       { kind: "start-presenting", presenterId: "42", audio: { sampleRate: 48000, channels: 2 } },
     ]);
+  });
+
+  it("puts the audio on the video's clock when the two are measured apart", async () => {
+    const { session, audioOptions } = setup({ audioRebaseUs: 5_000_000 });
+
+    await session.start(QUALITY);
+
+    expect(audioOptions()).toEqual({ timestampOffsetUs: 5_000_000 });
+  });
+
+  it("keeps the audio's own timestamps when nothing measures the clocks", async () => {
+    const { session, audioOptions } = setup();
+
+    await session.start(QUALITY);
+
+    expect(audioOptions()).toEqual({ timestampOffsetUs: 0 });
   });
 
   it("video frames carry the slot from presenting-started and an increasing clock", async () => {
