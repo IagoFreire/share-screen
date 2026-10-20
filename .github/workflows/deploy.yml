@@ -5,10 +5,11 @@ name: Deploy
 # and take minutes -- so the instance never builds anything. It only installs runtime
 # dependencies (express/ws/dotenv, all small) and runs node.
 
+# Manual only: production now runs on the home PC (start-bot.bat + cloudflared), so a
+# push to main must not ship anything to the old Lightsail box. Run it from the Actions
+# tab if that instance is ever brought back.
 on:
-  push:
-    branches: [main]
-  workflow_dispatch: # lets you re-deploy from the Actions tab without a new commit
+  workflow_dispatch:
 
 # Never let two deploys interleave rsync + restart on the same box.
 concurrency:
