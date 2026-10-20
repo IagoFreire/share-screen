@@ -6,6 +6,15 @@
  */
 export type JoinIdentity = { ok: true; userId: string | null; verified: boolean } | { ok: false };
 
+/**
+ * Whether this join should pause the same user's other connections (the "you opened
+ * another tab" bandwidth saving). A presenter-only connection -- the desktop app's
+ * capture side -- never watches anything, so it must not pause that user's player.
+ */
+export function pausesSiblingConnections(message: { presenterOnly?: boolean }): boolean {
+  return message.presenterOnly !== true;
+}
+
 export function resolveJoinIdentity(
   message: { userId: string | null; session?: string | null },
   verify: (token: string) => string | null,

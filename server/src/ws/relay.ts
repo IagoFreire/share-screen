@@ -14,7 +14,7 @@ import type { Room } from "./room.js";
 import { sendOrDrop, clearBackpressureState } from "./backpressure.js";
 import { isUserInVoiceChannel } from "../auth/verifyMember.js";
 import { verifySessionToken } from "../auth/session.js";
-import { resolveJoinIdentity } from "./joinIdentity.js";
+import { pausesSiblingConnections, resolveJoinIdentity } from "./joinIdentity.js";
 import { resolveChannelName, resolveGuildName, resolveUserName } from "../auth/discordNames.js";
 
 interface ConnectionState {
@@ -285,7 +285,7 @@ async function handleJoin(
   state.selectedSlot = streams[0]?.slot ?? SLOT_PRESENTER;
   state.hasReceivedKeyframe = false;
 
-  if (userId) pauseOtherConnectionsForUser(room, userId, ws);
+  if (userId && pausesSiblingConnections(message)) pauseOtherConnectionsForUser(room, userId, ws);
 
   send(ws, {
     kind: "joined",

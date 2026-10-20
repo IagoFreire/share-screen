@@ -2,11 +2,16 @@
 // Imported from JS for the same cache-busting reason as main.ts.
 import "../ui/app.css";
 import "./desktop.css";
+// Fingerprinted by Vite, like present.ts's copy, so a changed sound is never served stale.
+import doorKnockUrl from "../../assets/DoorKnock.mp3";
 import type { DesktopApi, StoredLogin } from "@screenshare-bot/shared";
+import { startDesktopBroadcast } from "./broadcast.js";
 import { h } from "./dom.js";
-import { startDesktopApp } from "./desktopApp.js";
+import { relayWsUrl, startDesktopApp, type DesktopApp } from "./desktopApp.js";
+import { createLiveController } from "./liveController.js";
 import { renderLoginScreen } from "./views/loginScreen.js";
 import { titleBar } from "./views/shell.js";
+import { confirmDialog, openTransmitModal } from "./views/transmitModal.js";
 
 /**
  * Entry point for desktop.html -- the page the ScreenShare desktop app (Electron)
@@ -15,7 +20,66 @@ import { titleBar } from "./views/shell.js";
  */
 
 function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin): void {
-  startDesktopApp(content, api, login, { onTransmit: null, isLive: () => false, viewerCount: () => null });
+  let viewerCount: number | null = null;
+  /** One element, rewound per alert -- see present.ts's playAlertChime. */
+  let alertAudio: HTMLAudioElement | null = null;
+  // Assigned right below; the hooks only run after the app has started.
+  let app: DesktopApp | null = null;
+
+  function playKnock(): void {
+    alertAudio ??= new Audio(doorKnockUrl);
+    alertAudio.currentTime = 0;
+    alertAudio.play().catch((error: unknown) => console.error("Failed to play alert sound:", error));
+    if (document.hidden) api.notify("Alguém bateu na porta", "Abra o ScreenShare para ver.");
+  }
+
+  const live = createLiveController({
+    startBroadcast: (sourceId, quality, target) =>
+      startDesktopBroadcast(sourceId, quality, target, {
+        wsUrl: relayWsUrl(),
+        userId: login.user.id,
+        session: login.session,
+        selectSource: (id) => api.selectSource(id),
+        onViewerCount: (count) => {
+          viewerCount = count;
+          app?.refreshUserPanel();
+        },
+        onAlert: playKnock,
+      }),
+    setLive: (isLive) => api.setLive(isLive),
+    confirmLeave: () =>
+      confirmDialog({
+        title: "Você saiu do canal de voz",
+        text: "Sua transmissão continua no ar para quem está no canal. Quer encerrar agora?",
+        confirmLabel: "Encerrar transmissão",
+        cancelLabel: "Continuar transmitindo",
+      }),
+  });
+
+  app = startDesktopApp(content, api, login, {
+    onTransmit: () => {
+      if (live.isLive) {
+        live.end();
+        return;
+      }
+      const voice = app?.voice();
+      if (voice?.status !== "in-channel") return;
+      const { channelId, guildId, channelName } = voice.location;
+      openTransmitModal(api, {
+        channelName: channelName ?? "canal de voz",
+        onGoLive: (sourceId, quality) => live.goLive(sourceId, quality, { roomId: channelId, guildId }),
+      });
+    },
+    isLive: () => live.isLive,
+    viewerCount: () => (live.isLive ? viewerCount : null),
+  });
+
+  live.onChange(() => {
+    if (!live.isLive) viewerCount = null;
+    app?.refreshUserPanel();
+  });
+  app.onVoiceChange((voice) => void live.onVoiceState(voice));
+  api.onEndLiveRequested(() => live.end());
 }
 
 async function boot(api: DesktopApi, content: HTMLElement): Promise<void> {

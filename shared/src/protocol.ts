@@ -150,8 +150,17 @@ export type ControlMessage =
    *
    * `session` (desktop app only) is a signed login; when present the server takes the
    * user id from it and ignores `userId`, and an invalid one is refused outright.
+   * `presenterOnly` marks a connection that only broadcasts (the desktop app's capture
+   * side), so it doesn't pause the same user's player connection.
    */
-  | { kind: "join"; roomId: string; userId: string | null; guildId: string | null; session?: string | null }
+  | {
+      kind: "join";
+      roomId: string;
+      userId: string | null;
+      guildId: string | null;
+      session?: string | null;
+      presenterOnly?: boolean;
+    }
   | {
       kind: "joined";
       roomId: string;

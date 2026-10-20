@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { resolveJoinIdentity } from "./joinIdentity.js";
+import { pausesSiblingConnections, resolveJoinIdentity } from "./joinIdentity.js";
+
+describe("pausesSiblingConnections", () => {
+  it("a viewer join pauses the same user's other connections", () => {
+    expect(pausesSiblingConnections({})).toBe(true);
+    expect(pausesSiblingConnections({ presenterOnly: false })).toBe(true);
+  });
+
+  it("a presenter-only join leaves the user's player alone", () => {
+    expect(pausesSiblingConnections({ presenterOnly: true })).toBe(false);
+  });
+});
 
 const verify = (token: string) => (token === "good-token" ? "42" : null);
 

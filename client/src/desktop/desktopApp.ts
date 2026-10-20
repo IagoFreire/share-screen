@@ -35,7 +35,8 @@ export interface DesktopApp {
   onVoiceChange(listener: (voice: VoiceState) => void): void;
 }
 
-function wsUrl(): string {
+/** The relay's WebSocket on the same origin desktop.html was served from. */
+export function relayWsUrl(): string {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   return `${protocol}://${window.location.host}/ws`;
 }
@@ -148,7 +149,7 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
     watchedRoomId = location.channelId;
     watchView = mountWatchView({
       root: playerHost,
-      wsUrl: wsUrl(),
+      wsUrl: relayWsUrl(),
       roomId: location.channelId,
       userId: login.user.id,
       guildId: location.guildId,
