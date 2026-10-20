@@ -10,7 +10,17 @@ import type { DesktopApi, DesktopSource, StoredLogin } from "@screenshare-bot/sh
 const api: DesktopApi = {
   getSources: () => ipcRenderer.invoke("desktop:get-sources") as Promise<DesktopSource[]>,
   selectSource: (id) => ipcRenderer.invoke("desktop:select-source", id) as Promise<void>,
-  login: () => ipcRenderer.invoke("desktop:login") as Promise<StoredLogin>,
+  // Main resolves { ok, value | message } (see main/ipcResult.ts) so the message shown
+  // is the pt-BR one, not Electron's "Error invoking remote method" wrapper. The type
+  // is restated here because a sandboxed preload can't import local modules.
+  login: async () => {
+    const result = (await ipcRenderer.invoke("desktop:login")) as
+      | { ok: true; value: StoredLogin }
+      | { ok: false; message: string };
+    if (!result.ok) throw new Error(result.message);
+    return result.value;
+  },
+  cancelLogin: () => ipcRenderer.invoke("desktop:cancel-login") as Promise<void>,
   getStoredLogin: () => ipcRenderer.invoke("desktop:get-stored-login") as Promise<StoredLogin | null>,
   logout: () => ipcRenderer.invoke("desktop:logout") as Promise<void>,
   setLive: (live) => ipcRenderer.send("desktop:set-live", live === true),

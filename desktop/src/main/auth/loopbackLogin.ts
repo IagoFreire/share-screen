@@ -23,6 +23,8 @@ export interface LoopbackLoginDeps {
   timeoutMs: number;
   /** Defaults to LOGIN_PORT; tests use their own. */
   port?: number;
+  /** Aborted when the user gives up (closed the browser tab, clicked "Cancelar"). */
+  signal?: AbortSignal;
 }
 
 export function buildAuthorizeUrl(clientId: string, state: string, port: number = LOGIN_PORT): string {
@@ -89,10 +91,18 @@ export function runLoopbackLogin(deps: LoopbackLoginDeps): Promise<DesktopLoginR
       });
     });
 
+    const onAbort = () => finish(() => reject(new Error("Login cancelado.")));
+    if (deps.signal?.aborted) {
+      reject(new Error("Login cancelado."));
+      return;
+    }
+    deps.signal?.addEventListener("abort", onAbort, { once: true });
+
     function finish(then: () => void): void {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      deps.signal?.removeEventListener("abort", onAbort);
       server.close();
       // Browsers keep the callback connection alive; without this the port stays bound.
       server.closeAllConnections();

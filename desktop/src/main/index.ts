@@ -16,6 +16,7 @@ import { LOGIN_TIMEOUT_MS, runLoopbackLogin } from "./auth/loopbackLogin";
 import { createSessionStore } from "./auth/sessionStore";
 import { createAppTray, type AppTray } from "./appTray";
 import { decideCloseAction, isNotification } from "./tray";
+import { toIpcResult } from "./ipcResult";
 import { createSourceSelection, isSourceId, pickDisplayMedia, THUMBNAIL_SIZE, toDesktopSource } from "./capture";
 import { isAllowedNavigation } from "./navigation";
 import { resolveServerOrigin } from "./serverOrigin";
@@ -193,27 +194,39 @@ function registerIpc(): void {
     decrypt: (data) => safeStorage.decryptString(data),
   });
   let loginInProgress: Promise<StoredLogin> | null = null;
+  let loginAbort: AbortController | null = null;
 
+  // Resolves to an IpcResult rather than rejecting, so the page shows the pt-BR message
+  // itself instead of Electron's "Error invoking remote method ..." wrapper.
   ipcMain.handle("desktop:login", async (event) => {
     assertTrustedSender(event);
     // A second click while the browser is open joins the running login instead of
     // failing on the busy loopback port.
-    loginInProgress ??= runLoopbackLogin({
-      openExternal: (url) => shell.openExternal(url),
-      fetchClientId: fetchDiscordClientId,
-      exchange: exchangeLoginCode,
-      timeoutMs: LOGIN_TIMEOUT_MS,
-    })
-      .then(async (login) => {
-        if (safeStorage.isEncryptionAvailable()) await sessionStore.save(login);
-        mainWindow?.show();
-        mainWindow?.focus();
-        return login;
+    if (!loginInProgress) {
+      loginAbort = new AbortController();
+      loginInProgress = runLoopbackLogin({
+        openExternal: (url) => shell.openExternal(url),
+        fetchClientId: fetchDiscordClientId,
+        exchange: exchangeLoginCode,
+        timeoutMs: LOGIN_TIMEOUT_MS,
+        signal: loginAbort.signal,
       })
-      .finally(() => {
-        loginInProgress = null;
-      });
-    return loginInProgress;
+        .then(async (login) => {
+          if (safeStorage.isEncryptionAvailable()) await sessionStore.save(login);
+          showMainWindow();
+          return login;
+        })
+        .finally(() => {
+          loginInProgress = null;
+          loginAbort = null;
+        });
+    }
+    return toIpcResult(loginInProgress);
+  });
+
+  ipcMain.handle("desktop:cancel-login", async (event) => {
+    assertTrustedSender(event);
+    loginAbort?.abort();
   });
 
   ipcMain.handle("desktop:get-stored-login", async (event) => {

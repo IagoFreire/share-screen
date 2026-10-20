@@ -27,6 +27,8 @@ export interface DesktopApi {
   selectSource(id: string): Promise<void>;
   /** Rejects with an Error whose message is ready to show (pt-BR). */
   login(): Promise<StoredLogin>;
+  /** Gives up on a login still waiting for the browser; the pending login() rejects. */
+  cancelLogin(): Promise<void>;
   getStoredLogin(): Promise<StoredLogin | null>;
   logout(): Promise<void>;
   /** Tells the tray whether a broadcast is live. */

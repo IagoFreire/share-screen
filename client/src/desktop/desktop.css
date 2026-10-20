@@ -688,6 +688,25 @@ body.desktop :focus-visible {
   opacity: 0.75;
 }
 
+.desk-login-cancel {
+  margin-top: 10px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--desk-text-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.desk-login-cancel:hover {
+  color: var(--desk-text);
+  text-decoration: underline;
+}
+
+.desk-login-cancel[hidden] {
+  display: none;
+}
+
 .desk-login-error {
   min-height: 1.4em;
   margin: 12px 0 0;

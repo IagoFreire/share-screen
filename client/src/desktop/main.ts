@@ -88,9 +88,13 @@ async function boot(api: DesktopApi, content: HTMLElement): Promise<void> {
     startLoggedIn(api, content, stored);
     return;
   }
-  renderLoginScreen(content, async () => {
-    startLoggedIn(api, content, await api.login());
-  });
+  renderLoginScreen(
+    content,
+    async () => {
+      startLoggedIn(api, content, await api.login());
+    },
+    () => void api.cancelLogin(),
+  );
 }
 
 function main(): void {

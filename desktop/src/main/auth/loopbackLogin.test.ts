@@ -123,6 +123,23 @@ describe("runLoopbackLogin", () => {
     probe.close();
   });
 
+  it("cancelling an abandoned login rejects at once and frees the port", async () => {
+    const controller = new AbortController();
+    const d = deps({ signal: controller.signal, timeoutMs: 60_000 });
+    const login = runLoopbackLogin(d);
+    await waitForOpened(d.opened);
+
+    controller.abort();
+
+    await expect(login).rejects.toThrow("Login cancelado.");
+    const probe = net.createServer();
+    await new Promise<void>((resolve, reject) => {
+      probe.once("error", reject);
+      probe.listen(d.port, "127.0.0.1", () => resolve());
+    });
+    probe.close();
+  });
+
   it("port in use rejects with the pt-BR message", async () => {
     const d = deps();
     const blocker = net.createServer();
