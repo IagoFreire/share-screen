@@ -17,6 +17,7 @@ import { createSessionStore } from "./auth/sessionStore";
 import { createAppTray, type AppTray } from "./appTray";
 import { decideCloseAction, isNotification } from "./tray";
 import { toIpcResult } from "./ipcResult";
+import { buildContentSecurityPolicy, isAllowedPermission } from "./webSecurity";
 import { createSourceSelection, isSourceId, pickDisplayMedia, THUMBNAIL_SIZE, toDesktopSource } from "./capture";
 import { isAllowedNavigation } from "./navigation";
 import { resolveServerOrigin } from "./serverOrigin";
@@ -74,6 +75,25 @@ function installDisplayMediaHandler(): void {
         callback({});
       });
   });
+}
+
+/** CSP on the server's pages and a permission allowlist -- see webSecurity.ts. */
+function installWebSecurity(): void {
+  const policy = buildContentSecurityPolicy(serverOrigin);
+  session.defaultSession.webRequest.onHeadersReceived({ urls: [`${serverOrigin}/*`] }, (details, callback) => {
+    if (details.resourceType !== "mainFrame") {
+      callback({});
+      return;
+    }
+    callback({ responseHeaders: { ...details.responseHeaders, "Content-Security-Policy": [policy] } });
+  });
+  session.defaultSession.setPermissionRequestHandler((_contents, permission, callback, details) => {
+    const mediaTypes = "mediaTypes" in details ? details.mediaTypes : undefined;
+    callback(isAllowedPermission(permission, details.requestingUrl, serverOrigin, mediaTypes));
+  });
+  session.defaultSession.setPermissionCheckHandler((_contents, permission, requestingOrigin) =>
+    isAllowedPermission(permission, requestingOrigin, serverOrigin),
+  );
 }
 
 function showOfflinePage(window: BrowserWindow): void {
@@ -285,6 +305,7 @@ if (!app.requestSingleInstanceLock()) {
 
   void app.whenReady().then(() => {
     registerIpc();
+    installWebSecurity();
     installDisplayMediaHandler();
     appTray = createAppTray({
       open: showMainWindow,
