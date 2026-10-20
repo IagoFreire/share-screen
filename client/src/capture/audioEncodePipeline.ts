@@ -1,5 +1,6 @@
 import type { AudioParams } from "@screenshare-bot/shared";
 import { TARGET_AUDIO_BITRATE_KBPS_DEFAULT } from "@screenshare-bot/shared";
+import { createCaptureTimeline } from "./captureTimeline.js";
 
 export type EncodedAudioHandler = (chunk: EncodedAudioChunk) => void;
 
@@ -50,8 +51,24 @@ export async function startAudioEncodePipeline(
     throw new Error(`AudioEncoder config not supported by this browser: ${JSON.stringify(encoderConfig)}`);
   }
 
+  // The encoder stamps packets by counting samples; put the real capture times back.
+  const timeline = createCaptureTimeline(params.sampleRate);
+  function restamp(chunk: EncodedAudioChunk): EncodedAudioChunk {
+    const frames = Math.round(((chunk.duration ?? 0) * params.sampleRate) / 1_000_000);
+    const timestamp = frames > 0 ? timeline.next(frames) : null;
+    if (timestamp === null) return chunk;
+    const data = new Uint8Array(chunk.byteLength);
+    chunk.copyTo(data);
+    return new EncodedAudioChunk({
+      type: chunk.type,
+      timestamp: Math.round(timestamp),
+      duration: chunk.duration ?? undefined,
+      data,
+    });
+  }
+
   const encoder = new AudioEncoder({
-    output: (chunk) => onChunk(chunk),
+    output: (chunk) => onChunk(restamp(chunk)),
     error: (error) => console.error("AudioEncoder error:", error),
   });
   encoder.configure(encoderConfig);
@@ -64,6 +81,7 @@ export async function startAudioEncodePipeline(
     while (!stopped) {
       const { done, value: data } = await reader.read();
       if (done || !data) break;
+      timeline.record(data.timestamp, Math.round((data.numberOfFrames * params.sampleRate) / data.sampleRate));
       encoder.encode(data);
       data.close();
     }
