@@ -15,6 +15,9 @@
 export const FRAME_HEADER_BYTES = 15;
 
 const FLAG_KEYFRAME = 0b0000_0001;
+/** Bits 1-2: simulcast layer (0 = best). Senders that predate simulcast leave them 0. */
+const LAYER_SHIFT = 1;
+const LAYER_MASK = 0b0000_0110;
 
 export enum FrameType {
   Video = 0,
@@ -34,6 +37,8 @@ export interface FrameHeader {
   clock: number;
   /** Only meaningful for FrameType.Video; ignored for audio/control. */
   keyFrame?: boolean;
+  /** Simulcast layer of a video frame, 0 (best) to 3; 0 when the sender sends one. */
+  layer?: number;
 }
 
 export interface EncodedFrame extends FrameHeader {
@@ -48,7 +53,7 @@ export function encodeFrame(header: FrameHeader, payload: Uint8Array): Uint8Arra
   view.setUint8(1, header.type);
   view.setFloat64(2, header.timestamp, true);
   view.setUint32(10, header.clock >>> 0, true);
-  view.setUint8(14, header.keyFrame ? FLAG_KEYFRAME : 0);
+  view.setUint8(14, (header.keyFrame ? FLAG_KEYFRAME : 0) | (((header.layer ?? 0) << LAYER_SHIFT) & LAYER_MASK));
 
   buffer.set(payload, FRAME_HEADER_BYTES);
   return buffer;
@@ -68,6 +73,7 @@ export function decodeFrame(data: ArrayBuffer | Uint8Array): EncodedFrame {
     timestamp: view.getFloat64(2, true),
     clock: view.getUint32(10, true),
     keyFrame: (flags & FLAG_KEYFRAME) !== 0,
+    layer: (flags & LAYER_MASK) >> LAYER_SHIFT,
     payload: bytes.subarray(FRAME_HEADER_BYTES),
   };
 }
@@ -91,11 +97,20 @@ export interface AudioParams {
  * viewer picks exactly one to watch at a time -- so egress stays "viewers x bitrate"
  * regardless of how many people are broadcasting.
  */
+/** One simulcast version of a broadcast; `layer` 0 is the best. */
+export interface LayerInfo {
+  layer: number;
+  height: number;
+  framerate: number;
+}
+
 export interface StreamInfo {
   /** Which frame slot carries this broadcast; assigned by the server, never the client. */
   slot: number;
   presenterId: string | null;
   audio: AudioParams | null;
+  /** Simulcast versions on offer; absent for single-version senders (the browser tab). */
+  layers?: LayerInfo[];
 }
 
 /**
@@ -174,7 +189,7 @@ export type ControlMessage =
     }
   /** Sent by the presenter tab (present.html). `presenterId` is the Discord user id
    *  so the Activity can tell "someone is presenting" from "*I* am presenting". */
-  | { kind: "start-presenting"; presenterId: string | null; audio: AudioParams | null }
+  | { kind: "start-presenting"; presenterId: string | null; audio: AudioParams | null; layers?: LayerInfo[] }
   /** Server -> presenter tab: which slot was allocated. The tab must stamp this on every
    *  frame it sends; the relay overwrites it anyway, but matching avoids confusion. */
   | { kind: "presenting-started"; slot: number }
@@ -195,6 +210,13 @@ export type ControlMessage =
    *  A viewer receives exactly one stream at a time no matter how many are live. */
   | { kind: "select-stream"; slot: number }
   /**
+   * Client -> server: which simulcast version this viewer wants. "auto" lets the relay
+   * pick from what the viewer's connection keeps up with (see server/src/ws/autoLayer.ts).
+   */
+  | { kind: "select-layer"; layer: number | "auto" }
+  /** Server -> client: the version now being sent, and whether "auto" chose it. */
+  | { kind: "layer-changed"; layer: number; auto: boolean }
+  /**
    * Plays an attention chime in a presenter's capture tab -- for reaching someone who is
    * heads-down in a game with headphones on. Admin-only, same rule as ending a
    * broadcast.
@@ -212,7 +234,8 @@ export type ControlMessage =
   | { kind: "request-active-broadcasts" }
   | { kind: "active-broadcasts"; broadcasts: ActiveBroadcast[] }
   | { kind: "viewer-count"; count: number }
-  | { kind: "request-keyframe" }
+  /** Viewer -> server, and server -> presenter; `layer` (to the presenter) names the encoder. */
+  | { kind: "request-keyframe"; layer?: number }
   /**
    * Server -> the *other* connection when the same user (matched by userId) joins the
    * room again from a second tab (e.g. opens "assistir numa aba do navegador" while the

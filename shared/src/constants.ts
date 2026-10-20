@@ -84,6 +84,22 @@ export function buildQualityPreset(
   return { width, height, framerate, bitrateKbps };
 }
 
+/**
+ * Simulcast: the presenter's own choice on top, plus lighter versions for viewers on
+ * weaker links. The lower layers always use the "balanced" bitrate; their whole point is
+ * to be cheap. A layer is only added when it is actually smaller than the one above it.
+ */
+const SIMULCAST_LOWER_LAYERS: ReadonlyArray<{ resolution: ResolutionKey; framerate: FramerateKey }> = [
+  { resolution: "720p", framerate: 30 },
+  { resolution: "480p", framerate: 30 },
+];
+
+export function planLayers(top: QualityPreset): QualityPreset[] {
+  const lower = SIMULCAST_LOWER_LAYERS.map(({ resolution, framerate }) => buildQualityPreset(resolution, framerate))
+    .filter((layer) => layer.height < top.height);
+  return [top, ...lower];
+}
+
 /** Drop frames for a viewer socket once its outgoing buffer exceeds this many bytes. */
 export const BACKPRESSURE_BUFFERED_BYTES_THRESHOLD = 2 * 1024 * 1024; // 2MB
 

@@ -1,5 +1,5 @@
 import type { WebSocket } from "ws";
-import type { AudioParams, StreamInfo } from "@screenshare-bot/shared";
+import type { AudioParams, LayerInfo, StreamInfo } from "@screenshare-bot/shared";
 import { MAX_PRESENTERS_PER_ROOM } from "@screenshare-bot/shared";
 
 interface PresenterSlot {
@@ -8,6 +8,8 @@ interface PresenterSlot {
   presenterId: string | null;
   /** Opus parameters, relayed so viewers configure a matching decoder. */
   audioParams: AudioParams | null;
+  /** Simulcast versions this presenter sends; undefined for single-version senders. */
+  layers: LayerInfo[] | undefined;
 }
 
 /**
@@ -53,7 +55,13 @@ export class Room {
         slot,
         presenterId: presenter.presenterId,
         audio: presenter.audioParams,
+        ...(presenter.layers ? { layers: presenter.layers } : {}),
       }));
+  }
+
+  /** How many simulcast versions the broadcast on `slot` carries (1 if it isn't simulcast). */
+  layerCountOf(slot: number): number {
+    return this.presenters.get(slot)?.layers?.length || 1;
   }
 
   canAddViewer(): boolean {
@@ -74,16 +82,21 @@ export class Room {
    * holds a slot updates it in place rather than taking a second one, which would
    * strand the first until that socket closed.
    */
-  allocateSlot(ws: WebSocket, presenterId: string | null, audioParams: AudioParams | null): number | null {
+  allocateSlot(
+    ws: WebSocket,
+    presenterId: string | null,
+    audioParams: AudioParams | null,
+    layers?: LayerInfo[],
+  ): number | null {
     const existing = this.slotOf(ws);
     if (existing !== null) {
-      this.presenters.set(existing, { ws, presenterId, audioParams });
+      this.presenters.set(existing, { ws, presenterId, audioParams, layers });
       return existing;
     }
 
     for (let slot = 0; slot < MAX_PRESENTERS_PER_ROOM; slot += 1) {
       if (!this.presenters.has(slot)) {
-        this.presenters.set(slot, { ws, presenterId, audioParams });
+        this.presenters.set(slot, { ws, presenterId, audioParams, layers });
         return slot;
       }
     }

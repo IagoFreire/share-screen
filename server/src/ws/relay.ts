@@ -7,6 +7,7 @@ import {
   FrameType,
   SLOT_PRESENTER,
   type ControlMessage,
+  type LayerInfo,
 } from "@screenshare-bot/shared";
 import { roomManager } from "../roomManager.js";
 import { config } from "../config.js";
@@ -15,6 +16,10 @@ import { sendOrDrop, clearBackpressureState } from "./backpressure.js";
 import { isUserInVoiceChannel } from "../auth/verifyMember.js";
 import { verifySessionToken } from "../auth/session.js";
 import { pausesSiblingConnections, resolveJoinIdentity } from "./joinIdentity.js";
+import { createAutoLayer, type AutoLayer } from "./autoLayer.js";
+
+/** The frame header carries the layer in 2 bits. */
+const MAX_LAYERS = 4;
 import { resolveChannelName, resolveGuildName, resolveUserName } from "../auth/discordNames.js";
 
 interface ConnectionState {
@@ -53,6 +58,11 @@ interface ConnectionState {
   /** True when this viewer asked to stop receiving video ("only audio", e.g. to
    *  listen along to music without watching). Audio keeps flowing regardless. */
   videoDisabled: boolean;
+  /** Which simulcast version this viewer asked for; "auto" lets autoLayer.ts decide. */
+  layerChoice: number | "auto";
+  /** The automatic choice for the watched broadcast, rebuilt when its layer count changes. */
+  autoLayer: AutoLayer | null;
+  autoLayerCount: number;
 }
 
 const connectionState = new WeakMap<WebSocket, ConnectionState>();
@@ -69,6 +79,9 @@ function getState(ws: WebSocket): ConnectionState {
       hasReceivedKeyframe: false,
       isPaused: false,
       videoDisabled: false,
+      layerChoice: "auto",
+      autoLayer: null,
+      autoLayerCount: 0,
     };
     connectionState.set(ws, state);
   }
@@ -131,9 +144,43 @@ function broadcastStreams(room: Room): void {
   broadcastControl(room, { kind: "streams-changed", streams: room.streams });
 }
 
-function requestKeyframeFromSlot(room: Room, slot: number): void {
+/** Asks a presenter for a keyframe -- on one simulcast layer when `layer` is given. */
+function requestKeyframeFromSlot(room: Room, slot: number, layer?: number): void {
   const presenter = room.getPresenter(slot);
-  if (presenter) send(presenter.ws, { kind: "request-keyframe" });
+  if (presenter) send(presenter.ws, layer === undefined ? { kind: "request-keyframe" } : { kind: "request-keyframe", layer });
+}
+
+/** The simulcast layer this viewer receives from the broadcast it is watching. */
+function effectiveLayer(state: ConnectionState, room: Room): number {
+  const count = room.layerCountOf(state.selectedSlot);
+  if (state.layerChoice !== "auto") return Math.min(state.layerChoice, count - 1);
+  if (!state.autoLayer || state.autoLayerCount !== count) {
+    state.autoLayer = createAutoLayer(count, Date.now());
+    state.autoLayerCount = count;
+  }
+  return state.autoLayer.layer;
+}
+
+/** Moves a viewer onto its (new) layer: it needs that layer's next keyframe to decode. */
+function announceLayer(ws: WebSocket, state: ConnectionState, room: Room): void {
+  const layer = effectiveLayer(state, room);
+  state.hasReceivedKeyframe = false;
+  requestKeyframeFromSlot(room, state.selectedSlot, layer);
+  send(ws, { kind: "layer-changed", layer, auto: state.layerChoice === "auto" });
+}
+
+/** Simulcast layers announced by a presenter, or undefined when it sends a single version. */
+function validLayers(value: unknown): LayerInfo[] | undefined {
+  if (!Array.isArray(value) || value.length < 2 || value.length > MAX_LAYERS) return undefined;
+  const layers = value.map((entry: Partial<LayerInfo> | null) => ({
+    layer: entry?.layer,
+    height: entry?.height,
+    framerate: entry?.framerate,
+  }));
+  const valid = layers.every(
+    (entry, index) => entry.layer === index && Number.isFinite(entry.height) && Number.isFinite(entry.framerate),
+  );
+  return valid ? (layers as LayerInfo[]) : undefined;
 }
 
 /**
@@ -192,14 +239,19 @@ export function handleMessage(ws: WebSocket, data: Uint8Array): void {
   // Audio is prioritised so a congested link thins the video rather than breaking speech.
   const priority = frame.type === FrameType.Audio ? "audio" : "video";
   const outgoing = encodeFrame({ ...frame, slot }, frame.payload);
+  const isVideo = frame.type === FrameType.Video;
+  const frameLayer = frame.layer ?? 0;
+  const now = Date.now();
 
   room.forEachViewer((viewer) => {
     const viewerState = getState(viewer);
     if (viewerState.isPaused) return; // watching via another tab right now
     if (viewerState.selectedSlot !== slot) return; // watching a different broadcast
 
-    if (frame.type === FrameType.Video) {
+    if (isVideo) {
       if (viewerState.videoDisabled) return; // chose audio-only
+      // Simulcast: exactly one version per viewer, so egress stays "viewers x one layer".
+      if (frameLayer !== effectiveLayer(viewerState, room)) return;
       if (!viewerState.hasReceivedKeyframe) {
         // Nothing this viewer's decoder can use yet -- skip rather than waste egress
         // on a frame it will just discard on arrival.
@@ -207,7 +259,11 @@ export function handleMessage(ws: WebSocket, data: Uint8Array): void {
         viewerState.hasReceivedKeyframe = true;
       }
     }
-    sendOrDrop(viewer, outgoing, priority);
+    const result = sendOrDrop(viewer, outgoing, priority);
+
+    if (isVideo && viewerState.layerChoice === "auto" && room.layerCountOf(slot) > 1) {
+      if (viewerState.autoLayer?.report(result, now) != null) announceLayer(viewer, viewerState, room);
+    }
   });
 }
 
@@ -313,7 +369,7 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       if (!room) return;
 
       const presenterId = state.isVerified ? state.userId : message.presenterId;
-      const slot = room.allocateSlot(ws, presenterId, message.audio);
+      const slot = room.allocateSlot(ws, presenterId, message.audio, validLayers(message.layers));
       if (slot === null) {
         send(ws, { kind: "error", message: "Room already has the maximum number of broadcasts." });
         return;
@@ -367,8 +423,21 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       if (!room) return;
 
       state.selectedSlot = message.slot;
-      state.hasReceivedKeyframe = false; // new stream, decoder starts cold
-      requestKeyframeFromSlot(room, message.slot);
+      state.autoLayer = null; // the new broadcast's "auto" starts over from its best layer
+      announceLayer(ws, state, room); // new stream, decoder starts cold
+      return;
+    }
+
+    case "select-layer": {
+      if (!state.roomId) return;
+      const room = roomManager.getRoom(state.roomId);
+      if (!room) return;
+
+      const choice = message.layer;
+      if (choice !== "auto" && !(Number.isInteger(choice) && choice >= 0 && choice < MAX_LAYERS)) return;
+      state.layerChoice = choice;
+      state.autoLayer = null;
+      announceLayer(ws, state, room);
       return;
     }
 
@@ -400,7 +469,7 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
     case "request-keyframe": {
       if (!state.roomId) return;
       const room = roomManager.getRoom(state.roomId);
-      if (room) requestKeyframeFromSlot(room, state.selectedSlot);
+      if (room) requestKeyframeFromSlot(room, state.selectedSlot, effectiveLayer(state, room));
       return;
     }
 
