@@ -1,6 +1,7 @@
 import {
   buildQualityPreset,
   TARGET_AUDIO_BITRATE_KBPS_DEFAULT,
+  type AudioApp,
   type BitrateLevelKey,
   type DesktopApi,
   type DesktopSource,
@@ -9,6 +10,7 @@ import {
   type ResolutionKey,
 } from "@screenshare-bot/shared";
 import { h, icon } from "../dom.js";
+import type { AudioChoice } from "../liveController.js";
 import { ICONS } from "./shell.js";
 
 /**
@@ -84,14 +86,65 @@ function saveAudioChoice(audio: boolean): void {
   }
 }
 
+/** Apps the user switched off, by lowercased executable name. */
+const EXCLUDED_APPS_STORAGE_KEY = "screenshare-bot:excluded-apps";
+/** Discord's builds start out excluded: its call echoing into the live is why this list exists. */
+const DEFAULT_EXCLUDED_APPS = ["discord.exe", "discordptb.exe", "discordcanary.exe"];
+/** How often the app list (and its meters) refreshes while the dialog is open. */
+const APPS_POLL_INTERVAL_MS = 1500;
+
+function loadExcludedApps(): Set<string> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(EXCLUDED_APPS_STORAGE_KEY) ?? "null") as unknown;
+    if (Array.isArray(saved)) return new Set(saved.filter((entry): entry is string => typeof entry === "string"));
+  } catch {
+    // Unreadable: fall back to the default.
+  }
+  return new Set(DEFAULT_EXCLUDED_APPS);
+}
+
+function saveExcludedApps(excluded: Set<string>): void {
+  try {
+    localStorage.setItem(EXCLUDED_APPS_STORAGE_KEY, JSON.stringify([...excluded]));
+  } catch {
+    // Storage unavailable: the choice just isn't remembered.
+  }
+}
+
+/** Friendlier names for apps people are likely to see in the list. */
+const KNOWN_APP_NAMES: Record<string, string> = {
+  "discord.exe": "Discord",
+  "discordptb.exe": "Discord PTB",
+  "discordcanary.exe": "Discord Canary",
+  "msedge.exe": "Microsoft Edge",
+  "chrome.exe": "Google Chrome",
+  "brave.exe": "Brave",
+  "firefox.exe": "Firefox",
+  "opera.exe": "Opera",
+  "spotify.exe": "Spotify",
+  "steam.exe": "Steam",
+  "shellexperiencehost.exe": "Sons do Windows",
+};
+
+/** "Spotify.exe" -> "Spotify"; unknown apps show their executable name without ".exe". */
+function appLabel(exe: string): string {
+  return KNOWN_APP_NAMES[exe.toLowerCase()] ?? exe.replace(/\.exe$/i, "");
+}
+
 export interface TransmitModalOptions {
   channelName: string;
-  onGoLive(sourceId: string, quality: QualityPreset, audio: boolean): Promise<void>;
+  onGoLive(sourceId: string, quality: QualityPreset, audio: AudioChoice): Promise<void>;
 }
 
 export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions): void {
   let choice = loadChoice();
   let audio = loadAudioChoice();
+  let excluded = loadExcludedApps();
+  /** Null until the first answer from the audio helper. */
+  let apps: AudioApp[] | null = null;
+  /** The helper isn't there or failed: the live takes the whole system mix instead. */
+  let appsUnavailable = false;
+  let appsTimer: ReturnType<typeof setInterval> | null = null;
   let sources: DesktopSource[] = [];
   let tab: DesktopSource["kind"] = "screen";
   let selectedId: string | null = null;
@@ -139,7 +192,81 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
 
   function close(): void {
     document.removeEventListener("keydown", onKeydown);
+    if (appsTimer) clearInterval(appsTimer);
     backdrop.remove();
+  }
+
+  function refreshApps(): void {
+    api.appAudio
+      .listApps()
+      .then((list) => {
+        apps = list;
+        renderAudio();
+      })
+      .catch(() => {
+        appsUnavailable = true;
+        if (appsTimer) clearInterval(appsTimer);
+        renderAudio();
+      });
+  }
+
+  function audioChoice(): AudioChoice {
+    if (!audio) return { mode: "off" };
+    if (appsUnavailable) return { mode: "system" };
+    return { mode: "apps", exclude: [...excluded] };
+  }
+
+  function toggleApp(exe: string): void {
+    const key = exe.toLowerCase();
+    const next = new Set(excluded);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    excluded = next;
+    saveExcludedApps(excluded);
+    renderAudio();
+  }
+
+  function appRow(app: AudioApp): HTMLElement {
+    const included = !excluded.has(app.exe.toLowerCase());
+    const fill = h("span", { class: "desk-meter-fill" });
+    // Peaks of normal program audio sit well below 1; scale so the bar actually moves.
+    fill.style.transform = `scaleX(${Math.min(1, app.peak * 2).toFixed(3)})`;
+    return h(
+      "div",
+      { class: `desk-app${included ? "" : " is-out"}` },
+      h("span", { class: "desk-app-icon", "aria-hidden": "true" }, appLabel(app.exe).slice(0, 1).toUpperCase()),
+      h("span", { class: "desk-app-name", title: app.exe }, appLabel(app.exe)),
+      included ? h("span", { class: "desk-meter" }, fill) : h("small", { class: "desk-app-out" }, "fora da live"),
+      h(
+        "button",
+        {
+          class: `desk-switch desk-switch-small${included ? " is-on" : ""}`,
+          type: "button",
+          role: "switch",
+          "aria-checked": included ? "true" : "false",
+          "aria-label": `${appLabel(app.exe)} na live`,
+          onClick: () => toggleApp(app.exe),
+        },
+        h("span", { class: "desk-switch-knob" }),
+      ),
+    );
+  }
+
+  function renderAppList(): HTMLElement {
+    if (appsUnavailable) {
+      return h("p", { class: "desk-audio-note" }, "A escolha por app não está disponível neste PC: vai o som do computador inteiro.");
+    }
+    if (apps === null) return h("p", { class: "desk-audio-note" }, "Procurando apps com som…");
+
+    const playing = new Set(apps.map((app) => app.exe.toLowerCase()));
+    const alwaysOut = [...excluded].filter((exe) => !playing.has(exe)).map(appLabel);
+    return h(
+      "div",
+      { class: "desk-apps" },
+      apps.length ? h("div", { class: "desk-app-list" }, ...apps.map(appRow)) : h("p", { class: "desk-audio-note" }, "Nenhum app tocando som agora."),
+      alwaysOut.length > 0 && h("p", { class: "desk-audio-note" }, `Sempre fora da live: ${alwaysOut.join(", ")}.`),
+      h("p", { class: "desk-audio-note" }, "Apps que começarem a tocar depois entram na live, menos os desligados."),
+    );
   }
 
   function onKeydown(event: KeyboardEvent): void {
@@ -188,26 +315,19 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
       },
       h("span", { class: "desk-switch-knob" }),
     );
-    audioBox.replaceChildren(
+    const header = h(
+      "div",
+      { class: `desk-audio-row${audio ? "" : " is-muted"}` },
+      icon(ICONS.speaker, "desk-audio-icon"),
       h(
-        "div",
-        { class: `desk-audio-row${audio ? "" : " is-muted"}` },
-        icon(ICONS.speaker, "desk-audio-icon"),
-        h(
-          "span",
-          { class: "desk-audio-text" },
-          h("strong", {}, "Som do computador"),
-          h(
-            "small",
-            {},
-            audio
-              ? "Inclui tudo o que toca no PC, inclusive o Discord. Escolher apps vem na próxima versão."
-              : "Desligado: a live vai sem som.",
-          ),
-        ),
-        toggle,
+        "span",
+        { class: "desk-audio-text" },
+        h("strong", {}, "Som dos apps"),
+        h("small", {}, audio ? "Desligue os apps que não devem tocar na live." : "Desligado: a live vai sem som."),
       ),
+      toggle,
     );
+    audioBox.replaceChildren(...(audio ? [header, renderAppList()] : [header]));
   }
 
   function renderTabs(): void {
@@ -276,7 +396,7 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
     error.textContent = "";
     syncGoLive();
     options
-      .onGoLive(selectedId, buildQualityPreset(choice.resolution, choice.fps, choice.bitrate), audio)
+      .onGoLive(selectedId, buildQualityPreset(choice.resolution, choice.fps, choice.bitrate), audioChoice())
       .then(close)
       .catch((reason: unknown) => {
         busy = false;
@@ -297,6 +417,8 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
   syncGoLive();
   document.body.append(backdrop);
   goLiveButton.focus();
+  refreshApps();
+  appsTimer = setInterval(refreshApps, APPS_POLL_INTERVAL_MS);
 
   api
     .getSources()

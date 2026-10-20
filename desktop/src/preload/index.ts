@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { DesktopApi, DesktopSource, StoredLogin } from "@screenshare-bot/shared";
+import type { AudioApp, DesktopApi, DesktopSource, StoredLogin } from "@screenshare-bot/shared";
 
 /**
  * Exposes `window.desktop` to desktop.html. Every call is a narrow, typed IPC message;
@@ -27,6 +27,29 @@ const api: DesktopApi = {
   notify: (title, body) => ipcRenderer.send("desktop:notify", String(title), String(body)),
   onEndLiveRequested: (listener) => {
     ipcRenderer.on("desktop:end-live", () => listener());
+  },
+  appAudio: {
+    listApps: () => ipcRenderer.invoke("desktop:audio-apps") as Promise<AudioApp[]>,
+    start: async (exclude) => {
+      const result = (await ipcRenderer.invoke("desktop:audio-start", exclude)) as
+        | { ok: true }
+        | { ok: false; message: string };
+      if (!result.ok) throw new Error(result.message);
+    },
+    stop: () => ipcRenderer.send("desktop:audio-stop"),
+    onBlock: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: Uint8Array) => {
+        // Copied into a fresh buffer: the IPC payload's byteOffset needn't be 4-aligned.
+        const samples = new Float32Array(data.byteLength / 4);
+        new Uint8Array(samples.buffer).set(data);
+        listener(samples);
+      };
+      ipcRenderer.on("desktop:audio-block", handler);
+      return () => ipcRenderer.removeListener("desktop:audio-block", handler);
+    },
+    onEnded: (listener) => {
+      ipcRenderer.on("desktop:audio-ended", () => listener());
+    },
   },
   windowControls: {
     minimize: () => ipcRenderer.send("desktop:window", "minimize"),

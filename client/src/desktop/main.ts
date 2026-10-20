@@ -40,6 +40,7 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
         userId: login.user.id,
         session: login.session,
         audio,
+        appAudio: api.appAudio,
         selectSource: (id, options) => api.selectSource(id, options),
         onViewerCount: (count) => {
           viewerCount = count;

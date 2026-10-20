@@ -8,7 +8,9 @@ import {
   type PresenterSession,
   type PresenterSessionDeps,
 } from "../session/presenterSession.js";
-import type { BroadcastHandle, BroadcastTarget } from "./liveController.js";
+import type { DesktopAppAudio } from "@screenshare-bot/shared";
+import { startAppAudioTrack, type AppAudioTrack } from "./appAudio.js";
+import type { AudioChoice, BroadcastHandle, BroadcastTarget } from "./liveController.js";
 
 /**
  * One desktop broadcast: its own presenter-only WebSocket (like present.html's tab, so
@@ -31,8 +33,9 @@ export interface BroadcastOptions {
   wsUrl: string;
   userId: string;
   session: string;
-  /** False makes a silent live: Electron then grants the capture without audio. */
-  audio: boolean;
+  audio: AudioChoice;
+  /** Per-app capture (the bundled helper); used when `audio.mode` is "apps". */
+  appAudio: DesktopAppAudio | null;
   selectSource(id: string, options: { audio: boolean }): Promise<void>;
   onViewerCount(count: number): void;
   /** Someone used "bater na porta" on this broadcast. */
@@ -61,7 +64,9 @@ export async function startDesktopBroadcast(
   options: BroadcastOptions,
   factories: BroadcastFactories = DEFAULT_FACTORIES,
 ): Promise<BroadcastHandle> {
-  await options.selectSource(sourceId, { audio: options.audio });
+  // Chromium's loopback only for "system"; "apps" takes its sound from the helper and
+  // "off" takes none, so both ask Electron for video alone.
+  await options.selectSource(sourceId, { audio: options.audio.mode === "system" });
 
   let onControl: (message: ControlMessage) => void = () => {};
   let onClose: () => void = () => {};
@@ -106,10 +111,19 @@ export async function startDesktopBroadcast(
     throw error;
   }
 
+  // A holder rather than a plain let: it is assigned inside the capture callback.
+  const appAudioTrack: { current: AppAudioTrack | null } = { current: null };
+  const audio = options.audio;
+  const appAudio = options.appAudio;
   const session = factories.createSession({
     sendFrame: (header, payload) => ws.sendFrame(header, payload),
     sendControl: (message) => ws.sendControl(message),
-    capture: startScreenCapture,
+    capture: async (captureQuality) => {
+      const streams = await startScreenCapture(captureQuality);
+      if (audio.mode !== "apps" || !appAudio) return streams;
+      appAudioTrack.current = await startAppAudioTrack(appAudio, audio.exclude, streams.videoTrack);
+      return { ...streams, audioTrack: appAudioTrack.current.track };
+    },
     startVideo: startVideoEncodePipeline,
     startAudio: startAudioEncodePipeline,
     presenterId: options.userId,
@@ -123,6 +137,7 @@ export async function startDesktopBroadcast(
     if (finished) return;
     finished = true;
     if (reason !== "ended") session.stop();
+    appAudioTrack.current?.stop();
     ws.close();
     if (reason === "stopped") return;
     if (typeof reason === "object") options.onInterrupted(reason.interrupted);
@@ -140,6 +155,7 @@ export async function startDesktopBroadcast(
     await session.start(quality);
   } catch (error) {
     console.error("Desktop broadcast failed to start:", error);
+    appAudioTrack.current?.stop();
     ws.close();
     throw new Error("Não foi possível iniciar a captura dessa fonte.");
   }

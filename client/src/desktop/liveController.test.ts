@@ -26,7 +26,8 @@ function setup(answers: boolean[] = []) {
   };
   const deps: LiveControllerDeps = {
     startBroadcast: async (sourceId, quality, target, audio) => {
-      calls.push(`start ${sourceId} ${quality.height}p ${target.roomId}${audio ? "" : " mute"}`);
+      const sound = audio.mode === "apps" ? ` apps-except:${audio.exclude.join("+")}` : audio.mode === "off" ? " mute" : "";
+      calls.push(`start ${sourceId} ${quality.height}p ${target.roomId}${sound}`);
       return handle;
     },
     setLive: (live) => liveStates.push(live),
@@ -59,9 +60,17 @@ describe("live controller", () => {
   it("passes the choice to broadcast without sound", async () => {
     const { controller, calls } = setup();
 
-    await controller.goLive("screen:0:0", QUALITY, TARGET, false);
+    await controller.goLive("screen:0:0", QUALITY, TARGET, { mode: "off" });
 
     expect(calls).toEqual(["start screen:0:0 1080p c1 mute"]);
+  });
+
+  it("passes the apps to leave out of the live", async () => {
+    const { controller, calls } = setup();
+
+    await controller.goLive("screen:0:0", QUALITY, TARGET, { mode: "apps", exclude: ["discord.exe"] });
+
+    expect(calls).toEqual(["start screen:0:0 1080p c1 apps-except:discord.exe"]);
   });
 
   it("end stops the broadcast and clears live", async () => {

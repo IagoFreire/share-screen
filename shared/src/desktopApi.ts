@@ -15,6 +15,27 @@ export interface DesktopSource {
   iconDataUrl: string | null;
 }
 
+/** An app currently playing sound, for the "Áudio da live" list. */
+export interface AudioApp {
+  /** Executable name, e.g. "Discord.exe" -- what exclusions are keyed by. */
+  exe: string;
+  name: string;
+  /** Current level, 0..1, for the meter. */
+  peak: number;
+}
+
+/** Per-app audio: Windows process loopback through the bundled audio helper. */
+export interface DesktopAppAudio {
+  listApps(): Promise<AudioApp[]>;
+  /** Starts the mix of every app except `exclude` (and the ScreenShare app itself). */
+  start(exclude: string[]): Promise<void>;
+  stop(): void;
+  /** 10 ms blocks of 48 kHz stereo interleaved float32. Returns an unsubscribe function. */
+  onBlock(listener: (pcm: Float32Array) => void): () => void;
+  /** The helper died mid-live. */
+  onEnded(listener: () => void): void;
+}
+
 /** What the app remembers between launches after "Entrar com Discord". */
 export interface StoredLogin {
   session: string;
@@ -37,6 +58,7 @@ export interface DesktopApi {
   notify(title: string, body: string): void;
   /** The tray's "Encerrar transmissão" was clicked. */
   onEndLiveRequested(listener: () => void): void;
+  appAudio: DesktopAppAudio;
   windowControls: {
     minimize(): void;
     toggleMaximize(): void;

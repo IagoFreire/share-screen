@@ -1005,6 +1005,103 @@ body.desktop :focus-visible {
   transform: translateX(16px);
 }
 
+.desk-switch-small {
+  width: 34px;
+  height: 20px;
+  margin-top: 0;
+}
+
+.desk-switch-small .desk-switch-knob {
+  width: 14px;
+  height: 14px;
+}
+
+.desk-switch-small.is-on .desk-switch-knob {
+  transform: translateX(14px);
+}
+
+/* --- Per-app audio list --- */
+.desk-apps {
+  margin-top: 8px;
+}
+
+.desk-app-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.desk-app {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: var(--desk-bg-sidebar);
+  transition: background-color var(--desk-fast) linear, opacity var(--desk-fast) linear;
+}
+
+.desk-app:hover {
+  background: var(--desk-bg-hover);
+}
+
+.desk-app.is-out {
+  opacity: 0.7;
+}
+
+.desk-app-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--desk-bg-active);
+  color: var(--desk-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.desk-app-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.desk-meter {
+  flex: 0 0 56px;
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--desk-bg-deep);
+}
+
+.desk-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--desk-green);
+  transform-origin: left center;
+  transition: transform 400ms var(--desk-ease);
+}
+
+.desk-app-out {
+  flex: 0 0 auto;
+  color: var(--desk-text-dim);
+  font-size: 11px;
+}
+
+.desk-audio-note {
+  margin: 8px 2px 0;
+  color: var(--desk-text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .desk-audio-text {
   display: flex;
   flex-direction: column;

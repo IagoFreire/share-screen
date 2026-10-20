@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import {
   app,
@@ -18,6 +19,7 @@ import { createSessionStore } from "./auth/sessionStore";
 import { createAppTray, type AppTray } from "./appTray";
 import { decideCloseAction, isNotification } from "./tray";
 import { toIpcResult } from "./ipcResult";
+import { isExeName, listAudioApps, startAppAudio, type AppAudioCapture } from "./audioHelper";
 import { buildContentSecurityPolicy, isAllowedPermission } from "./webSecurity";
 import { createSourceSelection, isSourceId, pickDisplayMedia, THUMBNAIL_SIZE, toDesktopSource } from "./capture";
 import { isAllowedNavigation } from "./navigation";
@@ -38,6 +40,8 @@ const ERR_ABORTED = -3;
 /** Time the page gets to send stop-presenting before a quit tears the window down. */
 const QUIT_GRACE_MS = 400;
 const APP_USER_MODEL_ID = "dev.iagofreire.screenshare";
+/** Upper bound on the exclusion list a page may send to the audio helper. */
+const MAX_EXCLUDED_APPS = 50;
 
 let mainWindow: BrowserWindow | null = null;
 let appTray: AppTray | null = null;
@@ -145,9 +149,14 @@ function createMainWindow(): BrowserWindow {
   // with it, and nothing on the page is left to send setLive(false). Without this the
   // tray would keep the live badge and the close button would keep hiding the window.
   window.webContents.on("did-start-navigation", (details) => {
-    if (details.isMainFrame && !details.isSameDocument) setLiveState(false);
+    if (!details.isMainFrame || details.isSameDocument) return;
+    setLiveState(false);
+    stopAppAudio();
   });
-  window.webContents.on("render-process-gone", () => setLiveState(false));
+  window.webContents.on("render-process-gone", () => {
+    setLiveState(false);
+    stopAppAudio();
+  });
 
   // Server down or the tunnel offline: a local page with a retry button beats a blank window.
   window.webContents.on("did-fail-load", (_event, errorCode, _description, _url, isMainFrame) => {
@@ -156,6 +165,20 @@ function createMainWindow(): BrowserWindow {
 
   void window.loadURL(appUrl);
   return window;
+}
+
+/** The bundled per-app audio helper (desktop/native/audio-helper). */
+function audioHelperPath(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "audio-helper.exe")
+    : path.join(__dirname, "../../native/audio-helper/target/release/audio-helper.exe");
+}
+
+let appAudio: AppAudioCapture | null = null;
+
+function stopAppAudio(): void {
+  appAudio?.stop();
+  appAudio = null;
 }
 
 function setLiveState(live: boolean): void {
@@ -188,6 +211,42 @@ function registerIpc(): void {
   ipcMain.on("desktop:set-live", (event, live: unknown) => {
     if (!isTrustedSender(event)) return;
     setLiveState(live === true);
+  });
+
+  ipcMain.handle("desktop:audio-apps", async (event) => {
+    assertTrustedSender(event);
+    return listAudioApps(audioHelperPath(), process.pid);
+  });
+
+  // Excludes this app's whole process tree (process.pid) on top of the user's list.
+  ipcMain.handle("desktop:audio-start", async (event, exclude: unknown) => {
+    assertTrustedSender(event);
+    return toIpcResult(
+      (async () => {
+        if (!Array.isArray(exclude) || exclude.length > MAX_EXCLUDED_APPS || !exclude.every(isExeName)) {
+          throw new Error("Lista de apps inválida.");
+        }
+        if (!fs.existsSync(audioHelperPath())) throw new Error("A captura de áudio por app não está disponível.");
+        stopAppAudio();
+        const sender = event.sender;
+        appAudio = startAppAudio(
+          audioHelperPath(),
+          process.pid,
+          exclude,
+          (block) => {
+            if (!sender.isDestroyed()) sender.send("desktop:audio-block", block);
+          },
+          () => {
+            appAudio = null;
+            if (!sender.isDestroyed()) sender.send("desktop:audio-ended");
+          },
+        );
+      })(),
+    );
+  });
+
+  ipcMain.on("desktop:audio-stop", (event) => {
+    if (isTrustedSender(event)) stopAppAudio();
   });
 
   ipcMain.on("desktop:notify", (event, title: unknown, body: unknown) => {
@@ -300,6 +359,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on("second-instance", showMainWindow);
   app.on("before-quit", () => {
     isQuitting = true;
+    stopAppAudio();
   });
 
   // Groups notifications under the app's name instead of "electron.app.Electron".

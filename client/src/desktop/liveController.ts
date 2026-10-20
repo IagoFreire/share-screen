@@ -20,13 +20,18 @@ export interface BroadcastTarget {
   guildId: string | null;
 }
 
+/**
+ * What the live carries as sound: nothing, the whole system mix (only when per-app
+ * capture isn't available), or every app except the ones the user switched off.
+ */
+export type AudioChoice = { mode: "off" } | { mode: "system" } | { mode: "apps"; exclude: string[] };
+
 export interface LiveControllerDeps {
-  /** `audio: false` is a silent live (the user turned "som do computador" off). */
   startBroadcast(
     sourceId: string,
     quality: QualityPreset,
     target: BroadcastTarget,
-    audio: boolean,
+    audio: AudioChoice,
   ): Promise<BroadcastHandle>;
   setLive(live: boolean): void;
   /** Asked when the user leaves the channel they're broadcasting to; true ends the live. */
@@ -35,7 +40,7 @@ export interface LiveControllerDeps {
 
 export interface LiveController {
   readonly isLive: boolean;
-  goLive(sourceId: string, quality: QualityPreset, target: BroadcastTarget, audio?: boolean): Promise<void>;
+  goLive(sourceId: string, quality: QualityPreset, target: BroadcastTarget, audio?: AudioChoice): Promise<void>;
   end(): void;
   onVoiceState(state: VoiceState): Promise<void>;
   /** Notified whenever isLive flips, so the UI can redraw. */
@@ -69,7 +74,7 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
       return broadcast !== null;
     },
 
-    async goLive(sourceId, quality, nextTarget, audio = true) {
+    async goLive(sourceId, quality, nextTarget, audio = { mode: "system" }) {
       if (broadcast) return;
       const handle = await deps.startBroadcast(sourceId, quality, nextTarget, audio);
       broadcast = handle;
