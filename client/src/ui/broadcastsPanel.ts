@@ -38,7 +38,8 @@ const AVATAR_COLORS = ["#5865f2", "#3ba55c", "#faa61a", "#eb459f", "#747f8d"];
 /** What the host is currently showing, read fresh on every render. */
 export interface BroadcastsPanelContext {
   roomId: string;
-  selectedSlot: number;
+  /** Null while the viewer watches nothing (see "Sair da live" in watchView.ts). */
+  selectedSlot: number | null;
   isAdmin: boolean;
   /** The local viewer's Discord id, or "" when unknown (marks their own broadcast). */
   userId: string;

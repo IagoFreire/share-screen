@@ -16,6 +16,7 @@ import {
   ICON_FULLSCREEN_ENTER,
   ICON_FULLSCREEN_EXIT,
   ICON_IDLE,
+  ICON_LEAVE,
   ICON_LIST,
   ICON_MUTED,
   ICON_REFRESH,
@@ -48,10 +49,14 @@ export interface WatchViewOptions {
   onJoined?: (info: { isAdmin: boolean; roomId: string }) => void;
   /** The relay refused the session; the view stops reconnecting with it. */
   onSessionInvalid?: () => void;
+  /** The broadcast being received changed, including to none ("Sair da live"). */
+  onWatchingChange?: (watching: { roomId: string; slot: number } | null) => void;
 }
 
 export interface WatchView {
   openBroadcast(broadcast: ActiveBroadcast): Promise<void>;
+  /** "Sair da live": receives nothing until a broadcast is picked again. */
+  stopWatching(): void;
   requestBroadcasts(): void;
   /** Closes the socket, stops both pipelines and drops every document/window listener. */
   destroy(): void;
@@ -91,6 +96,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
         <p class="idle-title" id="idle-title">Ninguém está transmitindo</p>
         <p class="idle-subtitle" id="idle-subtitle">Assim que alguém compartilhar a tela na call, aparece aqui.</p>
         <button id="resume-btn" class="btn-primary" type="button" style="display: none">Retomar aqui</button>
+        <button id="rewatch-btn" class="btn-primary" type="button" style="display: none">Voltar a assistir</button>
       </div>
       <div class="controls-zone">
         <div class="overlay-bar">
@@ -106,6 +112,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
             <input id="volume-slider" class="volume-slider" type="range" min="0" max="100" value="100" style="--fill: 100%" />
           </div>
           <button id="fullscreen-btn" class="icon-btn" type="button" title="Tela cheia">${ICON_FULLSCREEN_ENTER}</button>
+          <button id="leave-btn" class="icon-btn" type="button" title="Sair da live" style="display: none">${ICON_LEAVE}</button>
         </div>
       </div>
     </div>
@@ -124,6 +131,8 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   const idleTitle = root.querySelector<HTMLParagraphElement>("#idle-title")!;
   const idleSubtitle = root.querySelector<HTMLParagraphElement>("#idle-subtitle")!;
   const resumeButton = root.querySelector<HTMLButtonElement>("#resume-btn")!;
+  const rewatchButton = root.querySelector<HTMLButtonElement>("#rewatch-btn")!;
+  const leaveButton = root.querySelector<HTMLButtonElement>("#leave-btn")!;
   const liveButton = root.querySelector<HTMLButtonElement>("#live-btn")!;
   const broadcastsButton = root.querySelector<HTMLButtonElement>("#broadcasts-btn")!;
 
@@ -162,8 +171,16 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   let viewerCount = 0;
   /** Every broadcast live in this room. A room can carry several at once. */
   let streams: StreamInfo[] = [];
-  /** Which of them this tab is receiving -- exactly one at a time. */
-  let selectedSlot = 0;
+  /**
+   * Which of them this tab is receiving -- exactly one at a time, or none (null) after
+   * "Sair da live", which sticks across reconnects and new broadcasts until the viewer
+   * picks one: someone who left shouldn't be dragged back in by the next live.
+   */
+  let selectedSlot: number | null = 0;
+  /** What "Voltar a assistir" goes back to, while that broadcast is still live. */
+  let lastLeftSlot: number | null = null;
+  /** Last value given to onWatchingChange, as "room:slot" ("" for none). */
+  let notifiedWatching = "";
   let lastVolumeBeforeMute = 1;
   /** True while the server has paused this connection because the same user has
    *  another tab (the Activity, or yet another external tab) already receiving it. */
@@ -187,6 +204,8 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   /** True when the stream being watched is this user's own broadcast. */
   const isSelf = () => userId !== "" && currentStream()?.presenterId === userId;
   const hasPresenter = () => streams.length > 0;
+  /** Receiving a live broadcast -- false with nobody live, or after "Sair da live". */
+  const isWatching = () => currentStream() !== undefined;
   const audioParamsForSelection = () => currentStream()?.audio ?? null;
 
   function render(): void {
@@ -221,22 +240,38 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     // watching your own broadcast: this tab would otherwise be a blank void with no
     // video and no explanation, since it never renders your own broadcast back to you.
     const showPausedUi = isPausedHere && hasPresenter();
+    // "Sair da live" with something still on: say so, and offer the way back.
+    const showNotWatchingUi = !showPausedUi && hasPresenter() && selectedSlot === null;
+    // Your own broadcast with nobody else watching sends nothing (see audience-changed
+    // in the protocol), so the preview would just freeze without this.
+    const showSelfPausedUi = !showPausedUi && isSelf() && currentStream()?.paused === true;
     // Audio-only is its own idle-screen state, one rung below "paused" -- see App.ts.
-    const showAudioOnlyUi = !showPausedUi && !isSelf() && hasPresenter() && videoDisabled;
+    const showAudioOnlyUi = !showPausedUi && !isSelf() && isWatching() && videoDisabled;
     // Watching your own broadcast doesn't block video the way it blocks audio -- once
     // resumed this connection genuinely decodes your own stream, so the toggle is just
     // as real here as for any other viewer (just never paired with audio -- see App.ts).
-    const showVideoOffSelfUi = !showPausedUi && isSelf() && videoDisabled;
-    const showIdleScreen = !hasPresenter() || showPausedUi || showAudioOnlyUi || showVideoOffSelfUi;
+    const showVideoOffSelfUi = !showPausedUi && !showSelfPausedUi && isSelf() && videoDisabled;
+    const showIdleScreen =
+      !hasPresenter() || showPausedUi || showNotWatchingUi || showSelfPausedUi || showAudioOnlyUi || showVideoOffSelfUi;
     idleScreen.classList.toggle("is-hidden", !showIdleScreen);
 
     // Inline style rather than a CSS class -- see App.ts for why (an inline style can't
     // be outranked by any stylesheet rule).
     resumeButton.style.display = showPausedUi ? "" : "none";
+    rewatchButton.style.display = showNotWatchingUi ? "" : "none";
+    rewatchButton.textContent = rewatchSlot() === lastLeftSlot ? "Voltar a assistir" : "Assistir";
 
     if (showPausedUi) {
       idleTitle.textContent = "Pausado para economizar banda";
       idleSubtitle.textContent = "Você está conectado em outra aba.";
+    } else if (showNotWatchingUi) {
+      idleTitle.textContent = "Você não está assistindo nenhuma live";
+      idleSubtitle.textContent = isEmbedded
+        ? "Escolha uma transmissão na barra lateral para assistir."
+        : "Escolha uma transmissão para assistir.";
+    } else if (showSelfPausedUi) {
+      idleTitle.textContent = "Sua live está pausada";
+      idleSubtitle.textContent = "Ninguém está assistindo, então ela não gasta sua internet. Volta sozinha quando alguém abrir.";
     } else if (showAudioOnlyUi) {
       idleTitle.textContent = "Somente áudio";
       idleSubtitle.textContent = "O vídeo está desativado. Clique no ícone de câmera para reativar.";
@@ -248,40 +283,69 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
       idleSubtitle.textContent = "Assim que alguém compartilhar a tela na call, aparece aqui.";
     }
 
-    const controlsDisabled = isSelf() || isPausedHere;
+    const controlsDisabled = isSelf() || isPausedHere || !isWatching();
     muteButton.disabled = controlsDisabled;
     volumeSlider.disabled = controlsDisabled;
     muteButton.innerHTML = controlsDisabled || Number(volumeSlider.value) === 0 ? ICON_MUTED : ICON_VOLUME;
 
     // Unlike audio, video isn't blocked while watching your own broadcast -- see
-    // showVideoOffSelfUi above. Only actually being paused (or no presenter) means
+    // showVideoOffSelfUi above. Only actually being paused (or watching nothing) means
     // there's no pipeline to toggle.
     // Admin-only, and never for your own broadcast -- see App.ts.
-    const canModerateStream = isAdmin && hasPresenter() && !isSelf();
+    const canModerateStream = isAdmin && isWatching() && !isSelf();
     alertButton.style.display = canModerateStream ? "" : "none";
     endStreamButton.style.display = canModerateStream ? "" : "none";
 
-    videoToggleButton.disabled = isPausedHere || !hasPresenter();
+    videoToggleButton.disabled = isPausedHere || !isWatching();
     videoToggleButton.innerHTML = videoDisabled ? ICON_VIDEO_OFF : ICON_VIDEO;
     videoToggleButton.title = videoDisabled ? "Ativar vídeo" : "Desativar vídeo (somente áudio)";
 
     // Only offered while there's a video pipeline to refresh (see jumpToLive).
-    liveButton.style.display = hasPresenter() && !isPausedHere && !videoDisabled ? "" : "none";
+    liveButton.style.display = isWatching() && !isPausedHere && !videoDisabled ? "" : "none";
+    // Only the desktop app, whose player follows you into every voice channel; a
+    // browser tab is left by closing it.
+    leaveButton.style.display = isEmbedded && isWatching() ? "" : "none";
+
+    notifyWatching();
   }
 
-  /** Switches which broadcast is received -- see App.ts for why both pipelines restart. */
-  async function selectStream(slot: number): Promise<void> {
+  function notifyWatching(): void {
+    const stream = currentStream();
+    const key = stream ? `${roomId}:${stream.slot}` : "";
+    if (key === notifiedWatching) return;
+    notifiedWatching = key;
+    options.onWatchingChange?.(stream ? { roomId, slot: stream.slot } : null);
+  }
+
+  /** "Voltar a assistir": the broadcast left, if it's still on, else the first one. */
+  function rewatchSlot(): number | null {
+    if (streams.some((s) => s.slot === lastLeftSlot)) return lastLeftSlot;
+    return streams[0]?.slot ?? null;
+  }
+
+  /**
+   * Switches which broadcast is received, or (null) stops receiving any -- see App.ts
+   * for why both pipelines restart.
+   */
+  async function selectStream(slot: number | null): Promise<void> {
     if (slot === selectedSlot) return;
     selectedSlot = slot;
     wsClient.sendControl({ kind: "select-stream", slot });
 
     teardownVideoPipeline();
     canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    lastAudioParams = audioParamsForSelection();
     render();
 
     await ensureVideoPipeline();
-    void ensureAudioPipeline(audioParamsForSelection());
-    wsClient.sendControl({ kind: "request-keyframe" });
+    void ensureAudioPipeline(lastAudioParams);
+    if (slot !== null) wsClient.sendControl({ kind: "request-keyframe" });
+  }
+
+  function stopWatching(): void {
+    if (selectedSlot === null) return;
+    lastLeftSlot = selectedSlot;
+    void selectStream(null);
   }
 
   /**
@@ -314,7 +378,15 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   }
 
   function sendJoin(): void {
-    wsClient.sendControl({ kind: "join", roomId, userId: userId || null, guildId, session: options.session ?? null });
+    wsClient.sendControl({
+      kind: "join",
+      roomId,
+      userId: userId || null,
+      guildId,
+      session: options.session ?? null,
+      // Left the live before this (re)connect; a hop is a pick, so it always watches.
+      watchNothing: selectedSlot === null && pendingSlot === null,
+    });
   }
 
   /** Goes back to the room a refused hop left -- see App.ts's returnFromFailedHop. */
@@ -339,7 +411,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
   /** "Atualizar": restarts the picture from a fresh keyframe -- see App.ts's jumpToLive. */
   async function jumpToLive(): Promise<void> {
-    if (!hasPresenter() || isPausedHere || videoDisabled) return;
+    if (!isWatching() || isPausedHere || videoDisabled) return;
     teardownVideoPipeline();
     await ensureVideoPipeline();
     wsClient.sendControl({ kind: "request-keyframe" });
@@ -388,7 +460,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   /** Starts the video pipeline if one isn't already running, guarding against the race
    *  described where `videoPipelineGeneration` is declared. */
   async function ensureVideoPipeline(): Promise<void> {
-    if (videoDisabled || videoDecodePipeline) return;
+    if (videoDisabled || videoDecodePipeline || selectedSlot === null) return;
     const generation = ++videoPipelineGeneration;
     const pipeline = await startVideoDecodePipeline(canvas, {
       clock: mediaClock,
@@ -420,9 +492,10 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
         isAdmin = message.isAdmin;
         viewerCount = message.viewerCount;
         streams = message.streams;
-        // Mirror the server's choice of default slot for a fresh connection -- unless this
-        // join is a hop from the broadcast list, whose whole point was one specific slot.
-        selectedSlot = streams[0]?.slot ?? 0;
+        // Mirror the server's choice of default slot for a fresh connection -- none if
+        // this viewer had left the live (it joined with watchNothing) -- unless this join
+        // is a hop from the broadcast list, whose whole point was one specific slot.
+        if (selectedSlot !== null || pendingSlot !== null) selectedSlot = streams[0]?.slot ?? 0;
         if (pendingSlot !== null) {
           const wanted = streams.find((s) => s.slot === pendingSlot);
           if (wanted) {
@@ -464,8 +537,9 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
       case "streams-changed": {
         streams = message.streams;
         // The watched stream may have ended; the server already moved this connection
-        // to a surviving slot, so follow it instead of receiving nothing.
-        if (!currentStream()) selectedSlot = streams[0]?.slot ?? selectedSlot;
+        // to a surviving slot, so follow it instead of receiving nothing. Someone who
+        // left the live stays out -- the server keeps them on no slot too.
+        if (selectedSlot !== null && !currentStream()) selectedSlot = streams[0]?.slot ?? selectedSlot;
         lastAudioParams = audioParamsForSelection();
         render();
         // Refresh an open list now rather than on the next poll, so it never offers a
@@ -473,7 +547,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
         broadcastsPanel.refresh();
         if (!isPausedHere) {
           void ensureAudioPipeline(lastAudioParams);
-          if (hasPresenter()) wsClient.sendControl({ kind: "request-keyframe" });
+          if (isWatching()) wsClient.sendControl({ kind: "request-keyframe" });
         }
         return;
       }
@@ -494,7 +568,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
         render();
         void ensureVideoPipeline();
         void ensureAudioPipeline(lastAudioParams);
-        if (hasPresenter()) wsClient.sendControl({ kind: "request-keyframe" });
+        if (isWatching()) wsClient.sendControl({ kind: "request-keyframe" });
         return;
 
       case "room-full":
@@ -532,6 +606,13 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
   resumeButton.addEventListener("click", () => {
     wsClient.sendControl({ kind: "resume-viewing" });
+  });
+
+  leaveButton.addEventListener("click", () => stopWatching());
+
+  rewatchButton.addEventListener("click", () => {
+    const slot = rewatchSlot();
+    if (slot !== null) void selectStream(slot);
   });
 
   // Brief lockout after each chime -- see App.ts.
@@ -614,7 +695,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   // --- Resync after being backgrounded (see App.ts for the full rationale) ---
   function resyncToLive(): void {
     videoDecodePipeline?.resyncToLive();
-    if (hasPresenter()) wsClient.sendControl({ kind: "request-keyframe" });
+    if (isWatching()) wsClient.sendControl({ kind: "request-keyframe" });
   }
   function onVisibilityChange(): void {
     if (document.visibilityState === "visible") resyncToLive();
@@ -629,6 +710,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
   return {
     openBroadcast,
+    stopWatching,
     requestBroadcasts: () => wsClient.sendControl({ kind: "request-active-broadcasts" }),
     destroy() {
       wsClient.close();

@@ -13,6 +13,7 @@ function setup() {
   let wsClosed = 0;
   let sessionStops = 0;
   const interruptions: string[] = [];
+  const audiences: number[] = [];
 
   const session: PresenterSession = {
     isPresenting: true,
@@ -46,7 +47,7 @@ function setup() {
     audio: { mode: "system" },
     appAudio: null,
     selectSource: async () => {},
-    onViewerCount: () => {},
+    onAudience: (watchers) => audiences.push(watchers),
     onAlert: () => {},
     onInterrupted: (message) => interruptions.push(message),
   };
@@ -71,6 +72,7 @@ function setup() {
     wsClosed: () => wsClosed,
     sessionStops: () => sessionStops,
     interruptions,
+    audiences,
   };
 }
 
@@ -102,6 +104,16 @@ describe("desktop broadcast", () => {
 
     expect(endedCalls()).toBe(1);
     expect(interruptions).toHaveLength(1);
+  });
+
+  it("reports how many people watch the broadcast", async () => {
+    const { goLive, handlers, audiences } = setup();
+    await goLive();
+
+    handlers().onControl({ kind: "audience-changed", watchers: 3, videoWatchers: 2 });
+    handlers().onControl({ kind: "audience-changed", watchers: 0, videoWatchers: 0 });
+
+    expect(audiences).toEqual([3, 0]);
   });
 
   it("stopping on purpose is not reported as an interruption", async () => {

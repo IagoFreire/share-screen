@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { pausesSiblingConnections, resolveJoinIdentity } from "./joinIdentity.js";
+import { pausesSiblingConnections, resolveJoinIdentity, startsWatchingNothing } from "./joinIdentity.js";
+
+describe("startsWatchingNothing", () => {
+  it("a viewer starts on a broadcast by default", () => {
+    expect(startsWatchingNothing({})).toBe(false);
+  });
+
+  it("a viewer who had left the live stays out of it", () => {
+    expect(startsWatchingNothing({ watchNothing: true })).toBe(true);
+  });
+
+  it("a presenter-only connection never watches anything", () => {
+    expect(startsWatchingNothing({ presenterOnly: true })).toBe(true);
+  });
+});
 
 describe("pausesSiblingConnections", () => {
   it("a viewer join pauses the same user's other connections", () => {
@@ -9,6 +23,10 @@ describe("pausesSiblingConnections", () => {
 
   it("a presenter-only join leaves the user's player alone", () => {
     expect(pausesSiblingConnections({ presenterOnly: true })).toBe(false);
+  });
+
+  it("a join that watches nothing leaves the tab the user does watch in alone", () => {
+    expect(pausesSiblingConnections({ watchNothing: true })).toBe(false);
   });
 });
 

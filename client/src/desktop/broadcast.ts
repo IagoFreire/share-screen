@@ -38,7 +38,8 @@ export interface BroadcastOptions {
   /** Per-app capture (the bundled helper); used when `audio.mode` is "apps". */
   appAudio: DesktopAppAudio | null;
   selectSource(id: string, options: { audio: boolean }): Promise<void>;
-  onViewerCount(count: number): void;
+  /** How many people receive this broadcast; at 0 it is paused (see audience-changed). */
+  onAudience(watchers: number): void;
   /** Someone used "bater na porta" on this broadcast. */
   onAlert(): void;
   /** The broadcast ended because of the relay or the network, not the user. */
@@ -149,9 +150,10 @@ export async function startDesktopBroadcast(
   }
 
   onControl = (message) => {
+    // The session pauses itself on it; the count is still ours to show.
+    if (message.kind === "audience-changed") options.onAudience(message.watchers);
     if (session.handleControl(message)) return;
     if (message.kind === "play-alert") options.onAlert();
-    else if (message.kind === "viewer-count") options.onViewerCount(message.count);
     else if (message.kind === "error") finish({ interrupted: `A transmissão foi encerrada: ${message.message}` });
   };
 

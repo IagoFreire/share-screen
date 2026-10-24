@@ -1,6 +1,7 @@
 import type { WebSocket } from "ws";
 import type { AudioParams, LayerInfo, StreamInfo } from "@screenshare-bot/shared";
 import { MAX_PRESENTERS_PER_ROOM } from "@screenshare-bot/shared";
+import type { Audience } from "./audience.js";
 
 interface PresenterSlot {
   ws: WebSocket;
@@ -10,6 +11,8 @@ interface PresenterSlot {
   audioParams: AudioParams | null;
   /** Simulcast versions this presenter sends; undefined for single-version senders. */
   layers: LayerInfo[] | undefined;
+  /** Last audience told to the presenter; null until the relay first counts it. */
+  audience: Audience | null;
 }
 
 /**
@@ -56,7 +59,26 @@ export class Room {
         presenterId: presenter.presenterId,
         audio: presenter.audioParams,
         ...(presenter.layers ? { layers: presenter.layers } : {}),
+        ...(this.isPaused(slot) ? { paused: true } : {}),
       }));
+  }
+
+  /** True once the broadcast on `slot` is known to have nobody watching it. */
+  isPaused(slot: number): boolean {
+    return this.presenters.get(slot)?.audience?.watchers === 0;
+  }
+
+  /**
+   * Records who receives the broadcast on `slot`. Returns false when that is what was
+   * already recorded, so the presenter is only told about actual changes.
+   */
+  setAudience(slot: number, audience: Audience): boolean {
+    const presenter = this.presenters.get(slot);
+    if (!presenter) return false;
+    const previous = presenter.audience;
+    if (previous?.watchers === audience.watchers && previous.videoWatchers === audience.videoWatchers) return false;
+    this.presenters.set(slot, { ...presenter, audience });
+    return true;
   }
 
   /** How many simulcast versions the broadcast on `slot` carries (1 if it isn't simulcast). */
@@ -88,15 +110,17 @@ export class Room {
     audioParams: AudioParams | null,
     layers?: LayerInfo[],
   ): number | null {
+    // The audience starts unknown either way: a re-registered presenter restarts its
+    // encoders, so it has to be told again whether anyone is watching.
     const existing = this.slotOf(ws);
     if (existing !== null) {
-      this.presenters.set(existing, { ws, presenterId, audioParams, layers });
+      this.presenters.set(existing, { ws, presenterId, audioParams, layers, audience: null });
       return existing;
     }
 
     for (let slot = 0; slot < MAX_PRESENTERS_PER_ROOM; slot += 1) {
       if (!this.presenters.has(slot)) {
-        this.presenters.set(slot, { ws, presenterId, audioParams, layers });
+        this.presenters.set(slot, { ws, presenterId, audioParams, layers, audience: null });
         return slot;
       }
     }

@@ -37,8 +37,10 @@ function setup(options: { withAudio?: boolean; audioRebaseUs?: number } = {}) {
   const frames: Array<{ header: FrameHeader; payload: Uint8Array }> = [];
   const controls: ControlMessage[] = [];
   let emitVideo: (chunk: ReturnType<typeof fakeChunk>) => void = () => {};
+  let emitAudio: (chunk: ReturnType<typeof fakeChunk>) => void = () => {};
   let keyframeRequests = 0;
   let videoStops = 0;
+  const videoPauses: boolean[] = [];
   let audioOptions: unknown;
 
   const deps: PresenterSessionDeps = {
@@ -55,13 +57,17 @@ function setup(options: { withAudio?: boolean; audioRebaseUs?: number } = {}) {
         requestKeyframe: () => {
           keyframeRequests += 1;
         },
+        setPaused: (paused) => {
+          videoPauses.push(paused);
+        },
         stop: () => {
           videoStops += 1;
         },
       };
     },
-    startAudio: async (_track, _onChunk, startOptions) => {
+    startAudio: async (_track, onChunk, startOptions) => {
       audioOptions = startOptions;
+      emitAudio = (chunk) => onChunk(chunk as unknown as EncodedAudioChunk);
       return { params: { sampleRate: 48000, channels: 2 }, stop: () => {} };
     },
     ...(options.audioRebaseUs === undefined ? {} : { measureAudioRebaseUs: async () => options.audioRebaseUs! }),
@@ -74,8 +80,10 @@ function setup(options: { withAudio?: boolean; audioRebaseUs?: number } = {}) {
     controls,
     endSource: video.end,
     emitVideo: (chunk: ReturnType<typeof fakeChunk>) => emitVideo(chunk),
+    emitAudio: (chunk: ReturnType<typeof fakeChunk>) => emitAudio(chunk),
     keyframeRequests: () => keyframeRequests,
     videoStops: () => videoStops,
+    videoPauses,
     audioOptions: () => audioOptions,
   };
 }
@@ -186,6 +194,54 @@ describe("presenter session", () => {
   });
 });
 
+describe("presenter session audience", () => {
+  it("stops encoding and sending while nobody watches", async () => {
+    const { session, frames, emitVideo, emitAudio, videoPauses } = setup();
+    await session.start(QUALITY);
+
+    expect(session.handleControl({ kind: "audience-changed", watchers: 0, videoWatchers: 0 })).toBe(true);
+    emitVideo(fakeChunk([1], 1000, "key"));
+    emitAudio(fakeChunk([2], 1000));
+
+    expect(videoPauses).toEqual([true]);
+    expect(frames).toEqual([]);
+  });
+
+  it("starts sending again once someone watches", async () => {
+    const { session, frames, emitVideo, videoPauses } = setup();
+    await session.start(QUALITY);
+    session.handleControl({ kind: "audience-changed", watchers: 0, videoWatchers: 0 });
+
+    session.handleControl({ kind: "audience-changed", watchers: 1, videoWatchers: 1 });
+    emitVideo(fakeChunk([1], 1000, "key"));
+
+    expect(videoPauses).toEqual([true, false]);
+    expect(frames.map((frame) => frame.header.type)).toEqual([FrameType.Video]);
+  });
+
+  it("keeps the sound going for an audio-only audience", async () => {
+    const { session, frames, emitVideo, emitAudio, videoPauses } = setup();
+    await session.start(QUALITY);
+
+    session.handleControl({ kind: "audience-changed", watchers: 2, videoWatchers: 0 });
+    emitVideo(fakeChunk([1], 1000, "key"));
+    emitAudio(fakeChunk([2], 1000));
+
+    expect(videoPauses).toEqual([true]);
+    expect(frames.map((frame) => frame.header.type)).toEqual([FrameType.Audio]);
+  });
+
+  it("does not touch the encoders when only the number of watchers changes", async () => {
+    const { session, videoPauses } = setup();
+    await session.start(QUALITY);
+
+    session.handleControl({ kind: "audience-changed", watchers: 1, videoWatchers: 1 });
+    session.handleControl({ kind: "audience-changed", watchers: 3, videoWatchers: 3 });
+
+    expect(videoPauses).toEqual([]);
+  });
+});
+
 describe("presenter session simulcast", () => {
   const LAYERS = planLayers(buildQualityPreset("1080p", 60, "balanced"));
 
@@ -223,6 +279,7 @@ describe("presenter session simulcast", () => {
           requestKeyframe: () => {
             keyframes[index] += 1;
           },
+          setPaused: () => {},
           stop: () => {},
         };
       },

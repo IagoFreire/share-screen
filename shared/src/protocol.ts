@@ -111,6 +111,11 @@ export interface StreamInfo {
   audio: AudioParams | null;
   /** Simulcast versions on offer; absent for single-version senders (the browser tab). */
   layers?: LayerInfo[];
+  /**
+   * Nobody but the presenter is watching, so the presenter sends nothing (see
+   * audience-changed). Picking it brings it back within a keyframe.
+   */
+  paused?: boolean;
 }
 
 /**
@@ -166,7 +171,9 @@ export type ControlMessage =
    * `session` (desktop app only) is a signed login; when present the server takes the
    * user id from it and ignores `userId`, and an invalid one is refused outright.
    * `presenterOnly` marks a connection that only broadcasts (the desktop app's capture
-   * side), so it doesn't pause the same user's player connection.
+   * side), so it doesn't pause the same user's player connection. It also watches
+   * nothing, as does a join with `watchNothing` (a viewer who left the live before
+   * reconnecting); any other join starts on the lowest live broadcast.
    */
   | {
       kind: "join";
@@ -175,6 +182,7 @@ export type ControlMessage =
       guildId: string | null;
       session?: string | null;
       presenterOnly?: boolean;
+      watchNothing?: boolean;
     }
   | {
       kind: "joined";
@@ -207,8 +215,9 @@ export type ControlMessage =
    *  never have to reconstruct it from deltas. */
   | { kind: "streams-changed"; streams: StreamInfo[] }
   /** Client -> server: watch this slot and stop receiving whatever it was watching.
-   *  A viewer receives exactly one stream at a time no matter how many are live. */
-  | { kind: "select-stream"; slot: number }
+   *  A viewer receives exactly one stream at a time no matter how many are live;
+   *  `null` receives none ("Sair da live") until the viewer picks one again. */
+  | { kind: "select-stream"; slot: number | null }
   /**
    * Client -> server: which simulcast version this viewer wants. "auto" lets the relay
    * pick from what the viewer's connection keeps up with (see server/src/ws/autoLayer.ts).
@@ -234,6 +243,13 @@ export type ControlMessage =
   | { kind: "request-active-broadcasts" }
   | { kind: "active-broadcasts"; broadcasts: ActiveBroadcast[] }
   | { kind: "viewer-count"; count: number }
+  /**
+   * Server -> presenter: how many viewers receive this broadcast, not counting the
+   * presenter's own preview. With no watchers the presenter stops encoding and sending
+   * altogether, and with only audio-only ones it stops the video -- upload nobody would
+   * see. Sent on start and whenever either number changes.
+   */
+  | { kind: "audience-changed"; watchers: number; videoWatchers: number }
   /** Viewer -> server, and server -> presenter; `layer` (to the presenter) names the encoder. */
   | { kind: "request-keyframe"; layer?: number }
   /**

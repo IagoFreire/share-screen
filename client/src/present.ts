@@ -206,6 +206,14 @@ function main(): void {
   session.onEnded(() => resetAfterStop());
 
   function handleControl(message: ControlMessage): void {
+    // The session pauses itself on it; the status line is ours.
+    if (message.kind === "audience-changed" && session.isPresenting) {
+      setStatus(
+        message.watchers === 0
+          ? "Pausado: ninguém está assistindo. Volta sozinho quando alguém abrir."
+          : `Compartilhando -- ${message.watchers} assistindo.`,
+      );
+    }
     if (session.handleControl(message)) return;
 
     switch (message.kind) {
@@ -221,9 +229,6 @@ function main(): void {
       // A moderator is trying to get this presenter's attention.
       case "play-alert":
         playAlertChime();
-        return;
-      case "viewer-count":
-        if (session.isPresenting) setStatus(`Compartilhando -- ${message.count} espectador(es).`);
         return;
       default:
         return;

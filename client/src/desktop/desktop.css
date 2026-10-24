@@ -547,6 +547,38 @@ body.desktop :focus-visible {
   margin-left: auto;
 }
 
+/* "Sair da live": quiet until hovered, then the same red as leaving a call. */
+.desk-leave {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--desk-bg-raised);
+  color: var(--desk-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--desk-fast) linear;
+}
+
+.desk-leave:hover {
+  background: var(--desk-red);
+}
+
+.desk-leave:active {
+  background: var(--desk-red-hover);
+}
+
+.desk-leave svg {
+  width: 16px;
+  height: 16px;
+}
+
 .desk-stage {
   position: relative;
   flex: 1 1 auto;

@@ -35,7 +35,10 @@ export interface PresenterSession {
   start(quality: QualityPreset, layers?: QualityPreset[]): Promise<{ hasAudio: boolean }>;
   /** Idempotent; tells the relay only if a broadcast was actually live. */
   stop(): void;
-  /** Handles presenting-started, request-keyframe and request-stop-presenting; false otherwise. */
+  /**
+   * Handles presenting-started, request-keyframe, request-stop-presenting and
+   * audience-changed (which pauses the broadcast while nobody watches); false otherwise.
+   */
   handleControl(message: ControlMessage): boolean;
   /** Called when the broadcast ends without the caller asking: source closed, or the relay stopped it. */
   onEnded(listener: () => void): void;
@@ -69,6 +72,9 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
   /** Downscaled clones feeding the lower layers; ours to stop. */
   let layerTracks: MediaStreamTrack[] = [];
   let audio: AudioEncodePipeline | null = null;
+  /** From audience-changed: nobody wants the picture / nobody is watching at all. */
+  let videoPaused = false;
+  let audioPaused = false;
   const endedListeners: Array<() => void> = [];
 
   function stop(): void {
@@ -80,7 +86,22 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
     audio?.stop();
     audio = null;
     isPresenting = false;
+    videoPaused = false;
+    audioPaused = false;
     deps.sendControl({ kind: "stop-presenting" });
+  }
+
+  /**
+   * Follows the relay's count of who watches. The video encoders stop outright for an
+   * audience that wants no picture; audio is only held back from the wire, since Opus
+   * costs next to nothing to encode and its capture timeline expects every packet.
+   */
+  function applyAudience(watchers: number, videoWatchers: number): void {
+    audioPaused = watchers === 0;
+    const pauseVideo = videoWatchers === 0;
+    if (pauseVideo === videoPaused) return;
+    videoPaused = pauseVideo;
+    for (const pipeline of videos) pipeline.setPaused(pauseVideo);
   }
 
   function endOnItsOwn(): void {
@@ -114,6 +135,7 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
           await deps.startVideo(
             track,
             (chunk) => {
+              if (videoPaused) return; // still in the encoder when the pause came
               clock += 1;
               deps.sendFrame(
                 {
@@ -137,6 +159,7 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
         audio = await deps.startAudio(
           audioTrack,
           (chunk) => {
+            if (audioPaused) return;
             audioClock += 1;
             deps.sendFrame(
               { slot, type: FrameType.Audio, timestamp: chunk.timestamp / MICROSECONDS_PER_MILLISECOND, clock: audioClock },
@@ -175,6 +198,9 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
           return true;
         case "request-stop-presenting":
           endOnItsOwn();
+          return true;
+        case "audience-changed":
+          applyAudience(message.watchers, message.videoWatchers);
           return true;
         default:
           return false;

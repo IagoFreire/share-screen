@@ -25,6 +25,11 @@ export interface VideoEncodePipelineOptions {
 export interface VideoEncodePipeline {
   /** Forces the next encoded frame to be a keyframe (e.g. when a new viewer joins). */
   requestKeyframe: () => void;
+  /**
+   * Skips encoding while nobody watches. The capture keeps running, so resuming is
+   * immediate, and the first frame after it is a keyframe.
+   */
+  setPaused: (paused: boolean) => void;
   stop: () => void;
 }
 
@@ -93,6 +98,7 @@ export async function startVideoEncodePipeline(
   const reader = processor.readable.getReader();
 
   let stopped = false;
+  let paused = false;
   let lastKeyframeAt = 0;
   let forceKeyframeNow = true; // always start with a keyframe
 
@@ -100,6 +106,12 @@ export async function startVideoEncodePipeline(
     while (!stopped) {
       const { done, value: frame } = await reader.read();
       if (done || !frame) break;
+
+      // Still read, so the capture doesn't back up; just never encoded.
+      if (paused) {
+        frame.close();
+        continue;
+      }
 
       // First frame, or the source changed size (e.g. the shared window was resized).
       if (frame.displayWidth !== configuredWidth || frame.displayHeight !== configuredHeight) {
@@ -129,6 +141,11 @@ export async function startVideoEncodePipeline(
   return {
     requestKeyframe: () => {
       forceKeyframeNow = true;
+    },
+    setPaused: (next) => {
+      // Whoever arrives needs a keyframe; nothing before the pause is any use to them.
+      if (paused && !next) forceKeyframeNow = true;
+      paused = next;
     },
     stop: () => {
       stopped = true;

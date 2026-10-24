@@ -15,8 +15,9 @@ import type { Room } from "./room.js";
 import { sendOrDrop, clearBackpressureState } from "./backpressure.js";
 import { isUserInVoiceChannel } from "../auth/verifyMember.js";
 import { verifySessionToken } from "../auth/session.js";
-import { pausesSiblingConnections, resolveJoinIdentity } from "./joinIdentity.js";
+import { pausesSiblingConnections, resolveJoinIdentity, startsWatchingNothing } from "./joinIdentity.js";
 import { createAutoLayer, type AutoLayer } from "./autoLayer.js";
+import { countAudience } from "./audience.js";
 
 /** The frame header carries the layer in 2 bits. */
 const MAX_LAYERS = 4;
@@ -36,9 +37,10 @@ interface ConnectionState {
   /**
    * Which broadcast this connection is watching. A room can carry several at once but a
    * viewer receives exactly one, so this is what keeps egress at "viewers x bitrate"
-   * rather than multiplying by however many people happen to be live.
+   * rather than multiplying by however many people happen to be live. Null when it
+   * watches none ("Sair da live"), which also stops it counting as an audience.
    */
-  selectedSlot: number;
+  selectedSlot: number | null;
   /**
    * Whether this viewer has received a keyframe for the stream it currently watches. A
    * decoder can't do anything with a delta frame before its first keyframe, so
@@ -144,15 +146,18 @@ function broadcastStreams(room: Room): void {
   broadcastControl(room, { kind: "streams-changed", streams: room.streams });
 }
 
-/** Asks a presenter for a keyframe -- on one simulcast layer when `layer` is given. */
-function requestKeyframeFromSlot(room: Room, slot: number, layer?: number): void {
-  const presenter = room.getPresenter(slot);
+/**
+ * Asks a presenter for a keyframe -- on one simulcast layer when `layer` is given. A
+ * viewer watching nothing (`slot` null) has nobody to ask.
+ */
+function requestKeyframeFromSlot(room: Room, slot: number | null, layer?: number): void {
+  const presenter = slot === null ? undefined : room.getPresenter(slot);
   if (presenter) send(presenter.ws, layer === undefined ? { kind: "request-keyframe" } : { kind: "request-keyframe", layer });
 }
 
-/** The simulcast layer this viewer receives from the broadcast it is watching. */
-function effectiveLayer(state: ConnectionState, room: Room): number {
-  const count = room.layerCountOf(state.selectedSlot);
+/** The simulcast layer this viewer receives from the broadcast on `slot`, the one it watches. */
+function effectiveLayer(state: ConnectionState, room: Room, slot: number): number {
+  const count = room.layerCountOf(slot);
   if (state.layerChoice !== "auto") return Math.min(state.layerChoice, count - 1);
   if (!state.autoLayer || state.autoLayerCount !== count) {
     state.autoLayer = createAutoLayer(count, Date.now());
@@ -163,10 +168,41 @@ function effectiveLayer(state: ConnectionState, room: Room): number {
 
 /** Moves a viewer onto its (new) layer: it needs that layer's next keyframe to decode. */
 function announceLayer(ws: WebSocket, state: ConnectionState, room: Room): void {
-  const layer = effectiveLayer(state, room);
   state.hasReceivedKeyframe = false;
+  if (state.selectedSlot === null) return; // the choice applies once it picks a broadcast
+  const layer = effectiveLayer(state, room, state.selectedSlot);
   requestKeyframeFromSlot(room, state.selectedSlot, layer);
   send(ws, { kind: "layer-changed", layer, auto: state.layerChoice === "auto" });
+}
+
+/**
+ * Recounts who receives each broadcast and tells every presenter whose audience changed
+ * (see "audience-changed"), so one nobody watches stops spending its upload. Safe to
+ * call after any change to who watches what; presenters only hear about real changes.
+ *
+ * Returns whether some broadcast went from watched to unwatched or back, which changes
+ * its `paused` flag in the stream list -- the caller decides when to announce that.
+ */
+function syncAudiences(room: Room): boolean {
+  const viewers: ConnectionState[] = [];
+  room.forEachViewer((viewer) => viewers.push(getState(viewer)));
+
+  let pausedChanged = false;
+  for (const { slot, presenterId } of room.streams) {
+    const wasPaused = room.isPaused(slot);
+    const audience = countAudience(viewers, slot, presenterId);
+    if (!room.setAudience(slot, audience)) continue;
+
+    const presenter = room.getPresenter(slot);
+    if (presenter) send(presenter.ws, { kind: "audience-changed", ...audience });
+    if (room.isPaused(slot) !== wasPaused) pausedChanged = true;
+  }
+  return pausedChanged;
+}
+
+/** syncAudiences, then the new stream list when a broadcast paused or resumed. */
+function refreshAudiences(room: Room): void {
+  if (syncAudiences(room)) broadcastStreams(room);
 }
 
 /** Simulcast layers announced by a presenter, or undefined when it sends a single version. */
@@ -251,7 +287,7 @@ export function handleMessage(ws: WebSocket, data: Uint8Array): void {
     if (isVideo) {
       if (viewerState.videoDisabled) return; // chose audio-only
       // Simulcast: exactly one version per viewer, so egress stays "viewers x one layer".
-      if (frameLayer !== effectiveLayer(viewerState, room)) return;
+      if (frameLayer !== effectiveLayer(viewerState, room, slot)) return;
       if (!viewerState.hasReceivedKeyframe) {
         // Nothing this viewer's decoder can use yet -- skip rather than waste egress
         // on a frame it will just discard on arrival.
@@ -320,6 +356,7 @@ async function handleJoin(
       // Same as a disconnect (see handleClose): a sibling tab this connection had
       // paused in the old room now has nothing showing it the stream.
       if (state.userId) resumeConnectionForUser(previous, state.userId);
+      refreshAudiences(previous);
       roomManager.removeRoomIfEmpty(state.roomId);
     }
     // A pause belonged to the old room's sibling tab; carried over, this connection
@@ -337,19 +374,22 @@ async function handleJoin(
 
   // Default to the lowest live slot so a viewer joining mid-broadcast sees something
   // immediately rather than an empty player until they pick from the list.
-  const streams = room.streams;
-  state.selectedSlot = streams[0]?.slot ?? SLOT_PRESENTER;
+  state.selectedSlot = startsWatchingNothing(message) ? null : (room.streams[0]?.slot ?? SLOT_PRESENTER);
   state.hasReceivedKeyframe = false;
 
   if (userId && pausesSiblingConnections(message)) pauseOtherConnectionsForUser(room, userId, ws);
 
+  // Counted before "joined" so the list it carries already shows the broadcast this
+  // viewer just un-paused; everyone else hears about it right after.
+  const pausedChanged = syncAudiences(room);
   send(ws, {
     kind: "joined",
     roomId: message.roomId,
-    streams,
+    streams: room.streams,
     viewerCount: room.viewerCount,
     isAdmin: isAdmin(userId),
   });
+  if (pausedChanged) broadcastStreams(room);
 }
 
 function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
@@ -380,6 +420,8 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       room.removeViewer(ws);
 
       send(ws, { kind: "presenting-started", slot });
+      // Tells the new presenter right away whether anyone is watching yet.
+      syncAudiences(room);
       broadcastStreams(room);
       return;
     }
@@ -414,17 +456,20 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       return;
     }
 
-    // Switch which broadcast this viewer receives. The old stream stops flowing
-    // immediately, so watching two at once is never possible -- that's the whole reason
-    // extra presenters cost no extra egress.
+    // Switch which broadcast this viewer receives, or (null) stop receiving any. The old
+    // stream stops flowing immediately, so watching two at once is never possible --
+    // that's the whole reason extra presenters cost no extra egress.
     case "select-stream": {
       if (!state.roomId) return;
       const room = roomManager.getRoom(state.roomId);
       if (!room) return;
 
-      state.selectedSlot = message.slot;
+      const slot = message.slot;
+      if (slot !== null && !Number.isInteger(slot)) return;
+      state.selectedSlot = slot;
       state.autoLayer = null; // the new broadcast's "auto" starts over from its best layer
       announceLayer(ws, state, room); // new stream, decoder starts cold
+      refreshAudiences(room); // the old broadcast may have lost its last viewer, the new one gained one
       return;
     }
 
@@ -467,9 +512,9 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
     }
 
     case "request-keyframe": {
-      if (!state.roomId) return;
+      if (!state.roomId || state.selectedSlot === null) return;
       const room = roomManager.getRoom(state.roomId);
-      if (room) requestKeyframeFromSlot(room, state.selectedSlot, effectiveLayer(state, room));
+      if (room) requestKeyframeFromSlot(room, state.selectedSlot, effectiveLayer(state, room, state.selectedSlot));
       return;
     }
 
@@ -484,18 +529,22 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       state.hasReceivedKeyframe = false;
       send(ws, { kind: "viewing-resumed" });
       requestKeyframeFromSlot(room, state.selectedSlot);
+      refreshAudiences(room);
       return;
     }
 
     // Audio-only toggle: doesn't touch room membership or the pause mechanism, just
     // which frame types get forwarded to this specific connection (see handleMessage).
+    // It does change whether the presenter still needs to encode video at all.
     case "set-video-enabled": {
       state.videoDisabled = !message.enabled;
-      if (message.enabled && state.roomId) {
+      const room = state.roomId ? roomManager.getRoom(state.roomId) : undefined;
+      if (!room) return;
+      if (message.enabled) {
         state.hasReceivedKeyframe = false; // missed whatever aired while video was off
-        const room = roomManager.getRoom(state.roomId);
-        if (room) requestKeyframeFromSlot(room, state.selectedSlot);
+        requestKeyframeFromSlot(room, state.selectedSlot);
       }
+      refreshAudiences(room);
       return;
     }
 
@@ -521,6 +570,7 @@ function handleSlotWentAway(room: Room, freedSlot: number): void {
     if (fallback !== null) viewerState.selectedSlot = fallback;
   });
 
+  syncAudiences(room); // the fallback just inherited those viewers
   broadcastStreams(room);
   if (fallback !== null) requestKeyframeFromSlot(room, fallback);
 }
@@ -544,6 +594,7 @@ export function handleClose(ws: WebSocket): void {
     // nothing else showing it the stream anymore -- resume it automatically.
     if (state.userId) resumeConnectionForUser(room, state.userId);
 
+    refreshAudiences(room); // whatever it watched may have just lost its last viewer
     roomManager.removeRoomIfEmpty(state.roomId);
   }
 

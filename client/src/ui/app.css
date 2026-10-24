@@ -375,8 +375,15 @@ body.viewer .status {
   max-width: 32ch;
 }
 
-#resume-btn {
+#resume-btn,
+#rewatch-btn {
   margin-top: 0.6rem;
+}
+
+/* Above .controls-zone, which reaches up into a short player and swallowed its clicks. */
+#rewatch-btn {
+  position: relative;
+  z-index: 7;
 }
 
 #resume-btn.is-hidden {

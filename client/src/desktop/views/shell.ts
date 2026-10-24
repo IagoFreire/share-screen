@@ -14,6 +14,7 @@ export const ICONS = {
   speaker: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.4 3.2a1 1 0 0 1 1.6.8v16a1 1 0 0 1-1.6.8L6.7 17H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2.7l4.7-3.8zM15.5 8.5a1 1 0 0 1 1.4 0 5 5 0 0 1 0 7 1 1 0 0 1-1.4-1.4 3 3 0 0 0 0-4.2 1 1 0 0 1 0-1.4zm2.8-2.8a1 1 0 0 1 1.4 0 9 9 0 0 1 0 12.6 1 1 0 0 1-1.4-1.4 7 7 0 0 0 0-9.8 1 1 0 0 1 0-1.4z"/></svg>`,
   screen: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-6v2h3v2H7v-2h3v-2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 2v10h16V6H4z"/></svg>`,
   logout: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 3h9a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-9v-2h9V5h-9V3zm1.6 4.4L13 6l6 6-6 6-1.4-1.4 3.6-3.6H3v-2h12.2l-3.6-3.6z" transform="matrix(-1 0 0 1 24 0)"/></svg>`,
+  leave: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14zM9.41 15.95 12 13.36l2.59 2.59L16 14.54l-2.59-2.59L16 9.36l-1.41-1.41L12 10.54 9.41 7.95 8 9.36l2.59 2.59L8 14.54z"/></svg>`,
   minimize: `<svg viewBox="0 0 12 12"><rect x="1" y="5.5" width="10" height="1" fill="currentColor"/></svg>`,
   maximize: `<svg viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" fill="none" stroke="currentColor"/></svg>`,
   close: `<svg viewBox="0 0 12 12"><path d="M1.5 1.5l9 9m0-9-9 9" stroke="currentColor" stroke-width="1.1"/></svg>`,
@@ -120,6 +121,7 @@ export interface UserPanelOptions {
   user: DesktopUser;
   voice: VoiceState;
   isLive: boolean;
+  /** People receiving your live (your own preview not counted); null until the relay says. */
   viewerCount: number | null;
   onTransmit(): void;
   onLogout(): void;
@@ -131,10 +133,16 @@ function voiceLabel(voice: VoiceState): string {
   return "Procurando seu canal…";
 }
 
+/** A live nobody watches sends nothing until someone opens it (see audience-changed). */
+function liveLabel(viewerCount: number): string {
+  return viewerCount === 0 ? "Pausada: ninguém assistindo" : `Ao vivo · ${viewerCount} assistindo`;
+}
+
 export function renderUserPanel(container: HTMLElement, options: UserPanelOptions): void {
   const name = options.user.globalName ?? options.user.username;
   const inVoice = options.voice.status === "in-channel";
   const transmitLabel = options.isLive ? "Encerrar transmissão" : "Transmitir";
+  const isPausedLive = options.isLive && options.viewerCount === 0;
 
   container.replaceChildren(
     h(
@@ -152,10 +160,11 @@ export function renderUserPanel(container: HTMLElement, options: UserPanelOption
         h("span", { class: "desk-user-name" }, name),
         h(
           "span",
-          { class: "desk-user-status" },
-          options.isLive && options.viewerCount !== null
-            ? `Ao vivo · ${options.viewerCount} assistindo`
-            : voiceLabel(options.voice),
+          {
+            class: "desk-user-status",
+            title: isPausedLive ? "Sua live não gasta sua internet enquanto ninguém assiste. Volta sozinha quando alguém abrir." : undefined,
+          },
+          options.isLive && options.viewerCount !== null ? liveLabel(options.viewerCount) : voiceLabel(options.voice),
         ),
       ),
       h(
@@ -189,10 +198,16 @@ export function emptyState(title: string, text: string): HTMLElement {
   );
 }
 
+/** The broadcast on screen, and how to stop receiving it ("Sair da live"). */
+export interface MainHeaderWatching {
+  name: string;
+  onLeave(): void;
+}
+
 export function renderMainHeader(
   container: HTMLElement,
   voice: VoiceState,
-  watchingName: string | null,
+  watching: MainHeaderWatching | null,
 ): void {
   if (voice.status !== "in-channel") {
     container.replaceChildren(h("span", { class: "desk-main-title" }, "ScreenShare"));
@@ -202,12 +217,18 @@ export function renderMainHeader(
     icon(ICONS.speaker, "desk-main-icon"),
     h("span", { class: "desk-main-title" }, voice.location.channelName ?? "Canal de voz"),
   ];
-  const watching = watchingName
+  const watchingParts = watching
     ? [
         h("span", { class: "desk-main-divider", "aria-hidden": "true" }),
-        h("span", { class: "desk-main-sub" }, `assistindo ${watchingName}`),
+        h("span", { class: "desk-main-sub" }, `assistindo ${watching.name}`),
         h("span", { class: "desk-live desk-main-live" }, "AO VIVO"),
+        h(
+          "button",
+          { class: "desk-leave", type: "button", title: "Parar de assistir esta live", onClick: watching.onLeave },
+          icon(ICONS.leave),
+          "Sair da live",
+        ),
       ]
     : [];
-  container.replaceChildren(...title, ...watching);
+  container.replaceChildren(...title, ...watchingParts);
 }

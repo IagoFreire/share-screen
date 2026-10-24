@@ -42,8 +42,8 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
         audio,
         appAudio: api.appAudio,
         selectSource: (id, options) => api.selectSource(id, options),
-        onViewerCount: (count) => {
-          viewerCount = count;
+        onAudience: (watchers) => {
+          viewerCount = watchers;
           app?.refreshUserPanel();
         },
         onAlert: playKnock,

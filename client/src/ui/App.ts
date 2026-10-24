@@ -248,14 +248,18 @@ export function mountApp(options: MountAppOptions): void {
     // back (see ensureAudioPipeline), so "audio-only" would be a lie for it --
     // showVideoOffSelfUi covers that case instead.
     const watchingSelf = isWatchingSelf();
+    // Your own broadcast with nobody else watching sends nothing (see audience-changed
+    // in the protocol), so the preview would just freeze without this.
+    const showSelfPausedUi = !showPausedUi && watchingSelf && currentStream()?.paused === true;
     const showAudioOnlyUi = !showPausedUi && !watchingSelf && hasPresenter() && videoDisabled;
     // Watching your own broadcast doesn't block video the way it blocks audio: once
     // you hit "Retomar aqui" your Activity connection is a live viewer of your own
     // broadcast (see the resume-viewing handler on the server), so the video toggle is
     // just as real here as for any other viewer -- it just can't be framed as
     // "audio-only" since there's never any audio to fall back to for yourself.
-    const showVideoOffSelfUi = !showPausedUi && watchingSelf && videoDisabled;
-    const showIdleScreen = !hasPresenter() || showPausedUi || showAudioOnlyUi || showVideoOffSelfUi;
+    const showVideoOffSelfUi = !showPausedUi && !showSelfPausedUi && watchingSelf && videoDisabled;
+    const showIdleScreen =
+      !hasPresenter() || showPausedUi || showSelfPausedUi || showAudioOnlyUi || showVideoOffSelfUi;
     idleScreen.classList.toggle("is-hidden", !showIdleScreen);
 
     // Driven by an inline style rather than the .is-hidden class on purpose: the class
@@ -268,6 +272,9 @@ export function mountApp(options: MountAppOptions): void {
     if (showPausedUi) {
       idleTitle.textContent = "Pausado para economizar banda";
       idleSubtitle.textContent = "Você está conectado em outra aba.";
+    } else if (showSelfPausedUi) {
+      idleTitle.textContent = "Sua live está pausada";
+      idleSubtitle.textContent = "Ninguém está assistindo, então ela não gasta sua internet. Volta sozinha quando alguém abrir.";
     } else if (showAudioOnlyUi) {
       idleTitle.textContent = "Somente áudio";
       idleSubtitle.textContent = "O vídeo está desativado. Clique no ícone de câmera para reativar.";

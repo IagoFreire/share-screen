@@ -104,7 +104,11 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
     const watched = state.watching
       ? state.broadcasts.find((b) => b.roomId === state.watching?.roomId && b.slot === state.watching.slot)
       : undefined;
-    renderMainHeader(mainHead, state.voice, watched ? (watched.presenterName ?? "Alguém") : null);
+    renderMainHeader(
+      mainHead,
+      state.voice,
+      watched ? { name: watched.presenterName ?? "Alguém", onLeave: () => watchView?.stopWatching() } : null,
+    );
     renderOverlay();
   }
 
@@ -127,8 +131,8 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
   function pickBroadcast(channel: SidebarChannel, slot: number): void {
     const broadcast = state.broadcasts.find((b) => b.roomId === channel.channelId && b.slot === slot);
     if (!broadcast || !watchView) return;
+    // `watching` follows through onWatchingChange, like every other change of broadcast.
     void watchView.openBroadcast(broadcast);
-    setState({ watching: { roomId: broadcast.roomId, slot } });
   }
 
   function unmountPlayer(): void {
@@ -161,6 +165,9 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
       onActiveBroadcasts: (broadcasts) => setState({ broadcasts }),
       onJoined: () => watchView?.requestBroadcasts(),
       onSessionInvalid: () => void logOut(),
+      // The sidebar and header show what the player really receives: the relay's
+      // default pick on joining, a fallback after a live ends, or nothing.
+      onWatchingChange: (watching) => setState({ watching }),
     });
     broadcastsTimer = setInterval(() => watchView?.requestBroadcasts(), BROADCASTS_POLL_INTERVAL_MS);
     setState({ watching: null, selectedGuildId: location.guildId });
