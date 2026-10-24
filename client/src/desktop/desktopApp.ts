@@ -91,7 +91,11 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
     const selected = servers.find((server) => server.guildId === selectedGuildId) ?? null;
 
     renderRail(rail, servers, selectedGuildId, (guildId) => setState({ selectedGuildId: guildId }));
-    renderChannels(sidebarHead, channelList, selected, { watching: state.watching, onPick: pickBroadcast });
+    renderChannels(sidebarHead, channelList, selected, {
+      watching: state.watching,
+      selfUserId: login.user.id,
+      onPick: pickBroadcast,
+    });
     renderUserPanel(userPanel, {
       user: login.user,
       voice: state.voice,
@@ -162,6 +166,8 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
       guildId: location.guildId,
       session: login.session,
       embedded: true,
+      // Your own live never plays back to you here: it would cost you its download too.
+      skipOwnBroadcast: true,
       onActiveBroadcasts: (broadcasts) => setState({ broadcasts }),
       onJoined: () => watchView?.requestBroadcasts(),
       onSessionInvalid: () => void logOut(),

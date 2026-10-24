@@ -73,6 +73,8 @@ export function renderRail(
 export interface ChannelListOptions {
   /** The broadcast on screen, highlighted in the list. */
   watching: { roomId: string; slot: number } | null;
+  /** The logged-in user: their own live is listed but can't be opened (see skipOwnBroadcast). */
+  selfUserId: string;
   onPick(channel: SidebarChannel, slot: number): void;
 }
 
@@ -97,6 +99,15 @@ export function renderChannels(head: HTMLElement, list: HTMLElement, server: Sid
           channel.isMine && h("span", { class: "desk-channel-here", title: "Você está neste canal" }, "você"),
         ),
         ...channel.presenters.map((presenter) => {
+          if (presenter.userId === options.selfUserId) {
+            return h(
+              "div",
+              { class: "desk-presenter is-self", title: "Sua live não abre aqui, para não gastar sua internet" },
+              avatar(presenter.name, null, presenter.userId, "desk-presenter-avatar"),
+              h("span", { class: "desk-presenter-name" }, `${presenter.name} (você)`),
+              h("span", { class: "desk-live" }, "AO VIVO"),
+            );
+          }
           const isWatching =
             options.watching?.roomId === channel.channelId && options.watching.slot === presenter.slot;
           return h(

@@ -26,6 +26,7 @@ import {
 } from "./ui/icons.js";
 import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } from "./ui/broadcastsPanel.js";
 import { createQualityMenu, type QualityChoice } from "./ui/qualityMenu.js";
+import { autoWatchSlot, isOwnStream } from "./ui/streamChoice.js";
 
 /** Lockout after the "ao vivo" button -- see App.ts. */
 const JUMP_TO_LIVE_COOLDOWN_MS = 1500;
@@ -51,6 +52,12 @@ export interface WatchViewOptions {
   onSessionInvalid?: () => void;
   /** The broadcast being received changed, including to none ("Sair da live"). */
   onWatchingChange?: (watching: { roomId: string; slot: number } | null) => void;
+  /**
+   * Never receive the user's own broadcast (the desktop app): a preview through the
+   * relay costs the presenter download for nothing. The player then picks for itself
+   * which broadcast to be on -- see ui/streamChoice.ts.
+   */
+  skipOwnBroadcast?: boolean;
 }
 
 export interface WatchView {
@@ -73,6 +80,9 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   const setPageStatus = (text: string) => options.onStatus?.(text);
   const userId = options.userId ?? "";
   const isEmbedded = options.embedded ?? false;
+  const skipOwn = options.skipOwnBroadcast ?? false;
+  /** Whose broadcast "Voltar a assistir" may not go back to: nobody's unless skipOwn. */
+  const ownUserId = skipOwn ? userId : "";
 
   /**
    * The room being watched. An admin can hop to another room from the broadcast list
@@ -179,6 +189,10 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   let selectedSlot: number | null = 0;
   /** What "Voltar a assistir" goes back to, while that broadcast is still live. */
   let lastLeftSlot: number | null = null;
+  /** "Sair da live" was used and nothing picked since; skipOwn's own picks stay off. */
+  let hasLeft = false;
+  /** Whether the join just sent asked to start on no broadcast (see sendJoin). */
+  let joinWatchesNothing = false;
   /** Last value given to onWatchingChange, as "room:slot" ("" for none). */
   let notifiedWatching = "";
   let lastVolumeBeforeMute = 1;
@@ -241,7 +255,9 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     // video and no explanation, since it never renders your own broadcast back to you.
     const showPausedUi = isPausedHere && hasPresenter();
     // "Sair da live" with something still on: say so, and offer the way back.
-    const showNotWatchingUi = !showPausedUi && hasPresenter() && selectedSlot === null;
+    const showNotWatchingUi = !showPausedUi && selectedSlot === null && rewatchSlot() !== null;
+    // skipOwn with only your own broadcast on: there's nothing here to watch.
+    const showOwnLiveOnlyUi = !showPausedUi && selectedSlot === null && hasPresenter() && rewatchSlot() === null;
     // Your own broadcast with nobody else watching sends nothing (see audience-changed
     // in the protocol), so the preview would just freeze without this.
     const showSelfPausedUi = !showPausedUi && isSelf() && currentStream()?.paused === true;
@@ -252,7 +268,13 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     // as real here as for any other viewer (just never paired with audio -- see App.ts).
     const showVideoOffSelfUi = !showPausedUi && !showSelfPausedUi && isSelf() && videoDisabled;
     const showIdleScreen =
-      !hasPresenter() || showPausedUi || showNotWatchingUi || showSelfPausedUi || showAudioOnlyUi || showVideoOffSelfUi;
+      !hasPresenter() ||
+      showPausedUi ||
+      showNotWatchingUi ||
+      showOwnLiveOnlyUi ||
+      showSelfPausedUi ||
+      showAudioOnlyUi ||
+      showVideoOffSelfUi;
     idleScreen.classList.toggle("is-hidden", !showIdleScreen);
 
     // Inline style rather than a CSS class -- see App.ts for why (an inline style can't
@@ -269,6 +291,10 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
       idleSubtitle.textContent = isEmbedded
         ? "Escolha uma transmissão na barra lateral para assistir."
         : "Escolha uma transmissão para assistir.";
+    } else if (showOwnLiveOnlyUi) {
+      idleTitle.textContent = "Você está transmitindo";
+      idleSubtitle.textContent =
+        "Sua própria live não abre aqui, para não gastar sua internet. Quando outra pessoa transmitir, ela aparece aqui.";
     } else if (showSelfPausedUi) {
       idleTitle.textContent = "Sua live está pausada";
       idleSubtitle.textContent = "Ninguém está assistindo, então ela não gasta sua internet. Volta sozinha quando alguém abrir.";
@@ -319,8 +345,19 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
   /** "Voltar a assistir": the broadcast left, if it's still on, else the first one. */
   function rewatchSlot(): number | null {
-    if (streams.some((s) => s.slot === lastLeftSlot)) return lastLeftSlot;
-    return streams[0]?.slot ?? null;
+    return autoWatchSlot(streams, { preferred: lastLeftSlot, userId: ownUserId, hasLeft: false });
+  }
+
+  /**
+   * skipOwn: moves off the user's own broadcast, or onto someone's when there was
+   * nothing, after the list changed. True when it switched (selectStream did the rest).
+   */
+  function followAutoChoice(): boolean {
+    if (!skipOwn) return false;
+    const slot = autoWatchSlot(streams, { preferred: selectedSlot, userId, hasLeft });
+    if (slot === selectedSlot) return false;
+    void selectStream(slot);
+    return true;
   }
 
   /**
@@ -345,6 +382,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   function stopWatching(): void {
     if (selectedSlot === null) return;
     lastLeftSlot = selectedSlot;
+    hasLeft = true;
     void selectStream(null);
   }
 
@@ -354,6 +392,8 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
    * same socket re-joins, and the slot is selected once that join lands (pendingSlot).
    */
   async function openBroadcast(broadcast: ActiveBroadcast): Promise<void> {
+    if (skipOwn && isOwnStream(broadcast, userId)) return;
+    hasLeft = false;
     if (broadcast.roomId === roomId) {
       await selectStream(broadcast.slot);
       return;
@@ -378,14 +418,17 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   }
 
   function sendJoin(): void {
+    // Left the live before this (re)connect, or skipOwn, which picks for itself once
+    // joined rather than risk the relay's default being the user's own broadcast. A
+    // hop is a pick, so it always watches.
+    joinWatchesNothing = pendingSlot === null && (selectedSlot === null || skipOwn);
     wsClient.sendControl({
       kind: "join",
       roomId,
       userId: userId || null,
       guildId,
       session: options.session ?? null,
-      // Left the live before this (re)connect; a hop is a pick, so it always watches.
-      watchNothing: selectedSlot === null && pendingSlot === null,
+      watchNothing: joinWatchesNothing,
     });
   }
 
@@ -480,6 +523,26 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     videoDecodePipeline = null;
   }
 
+  /**
+   * Which broadcast a fresh connection is on, once "joined" lands. Mirrors the relay's
+   * choice -- none for a join with watchNothing (see sendJoin), else the lowest live
+   * one -- unless this join is a hop from the broadcast list, whose whole point was one
+   * specific slot. skipOwn then picks for itself: back to what it was on, or someone
+   * else's live.
+   */
+  function settleJoinedSelection(): void {
+    const previous = selectedSlot;
+    const hop = pendingSlot;
+    pendingSlot = null;
+    selectedSlot = joinWatchesNothing ? null : (streams[0]?.slot ?? 0);
+
+    let wanted = hop !== null && streams.some((s) => s.slot === hop) ? hop : selectedSlot;
+    if (skipOwn) wanted = autoWatchSlot(streams, { preferred: hop ?? previous, userId, hasLeft });
+    if (wanted === selectedSlot) return;
+    selectedSlot = wanted;
+    wsClient.sendControl({ kind: "select-stream", slot: wanted });
+  }
+
   async function handleControl(message: ControlMessage): Promise<void> {
     switch (message.kind) {
       case "joined":
@@ -492,18 +555,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
         isAdmin = message.isAdmin;
         viewerCount = message.viewerCount;
         streams = message.streams;
-        // Mirror the server's choice of default slot for a fresh connection -- none if
-        // this viewer had left the live (it joined with watchNothing) -- unless this join
-        // is a hop from the broadcast list, whose whole point was one specific slot.
-        if (selectedSlot !== null || pendingSlot !== null) selectedSlot = streams[0]?.slot ?? 0;
-        if (pendingSlot !== null) {
-          const wanted = streams.find((s) => s.slot === pendingSlot);
-          if (wanted) {
-            selectedSlot = wanted.slot;
-            wsClient.sendControl({ kind: "select-stream", slot: wanted.slot });
-          }
-          pendingSlot = null;
-        }
+        settleJoinedSelection();
         lastAudioParams = audioParamsForSelection();
         render();
         setPageStatus("");
@@ -540,11 +592,14 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
         // to a surviving slot, so follow it instead of receiving nothing. Someone who
         // left the live stays out -- the server keeps them on no slot too.
         if (selectedSlot !== null && !currentStream()) selectedSlot = streams[0]?.slot ?? selectedSlot;
-        lastAudioParams = audioParamsForSelection();
-        render();
         // Refresh an open list now rather than on the next poll, so it never offers a
         // broadcast that has already ended.
         broadcastsPanel.refresh();
+        // skipOwn: the user just went live on the slot this player was on, the relay's
+        // fallback was their own broadcast, or someone else started while there was nothing.
+        if (followAutoChoice()) return;
+        lastAudioParams = audioParamsForSelection();
+        render();
         if (!isPausedHere) {
           void ensureAudioPipeline(lastAudioParams);
           if (isWatching()) wsClient.sendControl({ kind: "request-keyframe" });
@@ -612,7 +667,9 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
   rewatchButton.addEventListener("click", () => {
     const slot = rewatchSlot();
-    if (slot !== null) void selectStream(slot);
+    if (slot === null) return;
+    hasLeft = false;
+    void selectStream(slot);
   });
 
   // Brief lockout after each chime -- see App.ts.
