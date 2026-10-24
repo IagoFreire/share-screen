@@ -16,7 +16,6 @@ import {
   ICON_FULLSCREEN_ENTER,
   ICON_FULLSCREEN_EXIT,
   ICON_IDLE,
-  ICON_LEAVE,
   ICON_LIST,
   ICON_MUTED,
   ICON_REFRESH,
@@ -121,9 +120,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
             <button id="mute-btn" class="icon-btn" type="button" title="Mudo">${ICON_VOLUME}</button>
             <input id="volume-slider" class="volume-slider" type="range" min="0" max="100" value="100" style="--fill: 100%" />
           </div>
-          <button id="fullscreen-btn" class="icon-btn" type="button" title="Tela cheia">${ICON_FULLSCREEN_ENTER}</button>
-          <button id="leave-btn" class="icon-btn" type="button" title="Sair da live" style="display: none">${ICON_LEAVE}</button>
-        </div>
+          <button id="fullscreen-btn" class="icon-btn" type="button" title="Tela cheia">${ICON_FULLSCREEN_ENTER}</button>        </div>
       </div>
     </div>
   `;
@@ -142,7 +139,6 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   const idleSubtitle = root.querySelector<HTMLParagraphElement>("#idle-subtitle")!;
   const resumeButton = root.querySelector<HTMLButtonElement>("#resume-btn")!;
   const rewatchButton = root.querySelector<HTMLButtonElement>("#rewatch-btn")!;
-  const leaveButton = root.querySelector<HTMLButtonElement>("#leave-btn")!;
   const liveButton = root.querySelector<HTMLButtonElement>("#live-btn")!;
   const broadcastsButton = root.querySelector<HTMLButtonElement>("#broadcasts-btn")!;
 
@@ -328,9 +324,6 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
     // Only offered while there's a video pipeline to refresh (see jumpToLive).
     liveButton.style.display = isWatching() && !isPausedHere && !videoDisabled ? "" : "none";
-    // Only the desktop app, whose player follows you into every voice channel; a
-    // browser tab is left by closing it.
-    leaveButton.style.display = isEmbedded && isWatching() ? "" : "none";
 
     notifyWatching();
   }
@@ -662,8 +655,6 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   resumeButton.addEventListener("click", () => {
     wsClient.sendControl({ kind: "resume-viewing" });
   });
-
-  leaveButton.addEventListener("click", () => stopWatching());
 
   rewatchButton.addEventListener("click", () => {
     const slot = rewatchSlot();
