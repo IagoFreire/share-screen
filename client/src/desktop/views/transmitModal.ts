@@ -1,8 +1,10 @@
 import {
+  AUDIO_QUALITY_DEFAULT,
+  AUDIO_QUALITY_PRESETS,
   buildQualityPreset,
   planLayers,
-  TARGET_AUDIO_BITRATE_KBPS_DEFAULT,
   type AudioApp,
+  type AudioQualityKey,
   type BitrateLevelKey,
   type DesktopApi,
   type DesktopSource,
@@ -63,10 +65,10 @@ function saveChoice(choice: QualityChoice): void {
   }
 }
 
-/** Upload for every simulcast version together, and which versions viewers can pick. */
-function uploadEstimate(quality: QualityPreset): string {
+/** Upload for every simulcast version and the sound together, and which versions viewers can pick. */
+function uploadEstimate(quality: QualityPreset, audioKbps: number): string {
   const layers = planLayers(quality);
-  const totalKbps = layers.reduce((sum, layer) => sum + layer.bitrateKbps, TARGET_AUDIO_BITRATE_KBPS_DEFAULT);
+  const totalKbps = layers.reduce((sum, layer) => sum + layer.bitrateKbps, audioKbps);
   const mbps = (totalKbps / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 });
   const versions = layers.map((layer) => `${layer.height}p${layer.framerate}`);
   const choice =
@@ -90,6 +92,31 @@ function loadAudioChoice(): boolean {
 function saveAudioChoice(audio: boolean): void {
   try {
     localStorage.setItem(AUDIO_STORAGE_KEY, audio ? "on" : "off");
+  } catch {
+    // Storage unavailable: the choice just isn't remembered.
+  }
+}
+
+/** "Qualidade do som": see AUDIO_QUALITY_PRESETS for what each one encodes at. */
+const AUDIO_QUALITY_STORAGE_KEY = "screenshare-bot:audio-quality";
+const AUDIO_QUALITY_OPTIONS: Array<{ key: AudioQualityKey; label: string; hint: string }> = [
+  { key: "light", label: "Leve", hint: "menos internet e processador, bom para PC mais fraco" },
+  { key: "normal", label: "Normal", hint: "bom para voz e jogo" },
+  { key: "high", label: "Alta", hint: "melhor para música" },
+];
+
+function loadAudioQuality(): AudioQualityKey {
+  try {
+    const saved = localStorage.getItem(AUDIO_QUALITY_STORAGE_KEY);
+    return AUDIO_QUALITY_OPTIONS.find((option) => option.key === saved)?.key ?? AUDIO_QUALITY_DEFAULT;
+  } catch {
+    return AUDIO_QUALITY_DEFAULT;
+  }
+}
+
+function saveAudioQuality(quality: AudioQualityKey): void {
+  try {
+    localStorage.setItem(AUDIO_QUALITY_STORAGE_KEY, quality);
   } catch {
     // Storage unavailable: the choice just isn't remembered.
   }
@@ -148,6 +175,7 @@ export interface TransmitModalOptions {
 export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions): void {
   let choice = loadChoice();
   let audio = loadAudioChoice();
+  let audioQuality = loadAudioQuality();
   let excluded = loadExcludedApps();
   /** Null until the first answer from the audio helper. */
   let apps: AudioApp[] | null = null;
@@ -221,8 +249,8 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
 
   function audioChoice(): AudioChoice {
     if (!audio) return { mode: "off" };
-    if (appsUnavailable) return { mode: "system" };
-    return { mode: "apps", exclude: [...excluded] };
+    if (appsUnavailable) return { mode: "system", quality: audioQuality };
+    return { mode: "apps", exclude: [...excluded], quality: audioQuality };
   }
 
   function toggleApp(exe: string): void {
@@ -304,7 +332,28 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
       h("div", { class: "desk-chips" }, ...FPS_OPTIONS.map((f) => chip(`${f} fps`, f, choice.fps, (fps) => setChoice({ fps })))),
       h("div", { class: "desk-chips" }, ...BITRATE_OPTIONS.map((b) => chip(b.label, b.key, choice.bitrate, (bitrate) => setChoice({ bitrate })))),
     );
-    estimate.textContent = uploadEstimate(buildQualityPreset(choice.resolution, choice.fps, choice.bitrate));
+    renderEstimate();
+  }
+
+  function renderEstimate(): void {
+    const audioKbps = audio ? AUDIO_QUALITY_PRESETS[audioQuality].bitrateKbps : 0;
+    estimate.textContent = uploadEstimate(buildQualityPreset(choice.resolution, choice.fps, choice.bitrate), audioKbps);
+  }
+
+  function renderAudioQuality(): HTMLElement {
+    const picked = AUDIO_QUALITY_OPTIONS.find((option) => option.key === audioQuality)!;
+    const pick = (quality: AudioQualityKey) => {
+      audioQuality = quality;
+      saveAudioQuality(quality);
+      renderAudio();
+    };
+    return h(
+      "div",
+      { class: "desk-audio-quality" },
+      h("p", { class: "desk-label" }, "Qualidade do som"),
+      h("div", { class: "desk-chips" }, ...AUDIO_QUALITY_OPTIONS.map((option) => chip(option.label, option.key, audioQuality, pick))),
+      h("p", { class: "desk-audio-note" }, `${AUDIO_QUALITY_PRESETS[audioQuality].bitrateKbps} kbps · ${picked.hint}`),
+    );
   }
 
   function renderAudio(): void {
@@ -336,7 +385,8 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
       ),
       toggle,
     );
-    audioBox.replaceChildren(...(audio ? [header, renderAppList()] : [header]));
+    audioBox.replaceChildren(...(audio ? [header, renderAudioQuality(), renderAppList()] : [header]));
+    renderEstimate();
   }
 
   function renderTabs(): void {

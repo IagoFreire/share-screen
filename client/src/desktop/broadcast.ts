@@ -1,4 +1,10 @@
-import { planLayers, type ControlMessage, type QualityPreset } from "@screenshare-bot/shared";
+import {
+  AUDIO_QUALITY_DEFAULT,
+  AUDIO_QUALITY_PRESETS,
+  planLayers,
+  type ControlMessage,
+  type QualityPreset,
+} from "@screenshare-bot/shared";
 import { startAudioEncodePipeline } from "../capture/audioEncodePipeline.js";
 import { measureAudioRebaseUs, measureLoopbackAudioRebaseUs } from "../capture/clockOffset.js";
 import { startScreenCapture } from "../capture/screenCapture.js";
@@ -58,6 +64,12 @@ const DEFAULT_FACTORIES: BroadcastFactories = {
   createWs: (url, handlers) => new WsClient(url, handlers),
   createSession: createPresenterSession,
 };
+
+/** The Opus settings for the "Qualidade do som" picked in the transmit dialog. */
+export function audioEncodingFor(audio: AudioChoice): { bitrateKbps: number; complexity: number } {
+  const quality = audio.mode === "off" ? AUDIO_QUALITY_DEFAULT : (audio.quality ?? AUDIO_QUALITY_DEFAULT);
+  return AUDIO_QUALITY_PRESETS[quality];
+}
 
 export async function startDesktopBroadcast(
   sourceId: string,
@@ -127,7 +139,8 @@ export async function startDesktopBroadcast(
       return { ...streams, audioTrack: appAudioTrack.current.track };
     },
     startVideo: startVideoEncodePipeline,
-    startAudio: startAudioEncodePipeline,
+    startAudio: (track, onChunk, startOptions) =>
+      startAudioEncodePipeline(track, onChunk, { ...startOptions, ...audioEncodingFor(audio) }),
     // Chromium's loopback ("system") hears the mix before the speakers do; the helper's
     // per-app audio is already stamped on the video's clock (see appAudio.ts).
     measureAudioRebaseUs: audio.mode === "system" ? measureLoopbackAudioRebaseUs : measureAudioRebaseUs,

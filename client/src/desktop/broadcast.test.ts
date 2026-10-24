@@ -2,7 +2,18 @@ import { describe, expect, it } from "vitest";
 import { buildQualityPreset, type ControlMessage } from "@screenshare-bot/shared";
 import type { WsClientHandlers } from "../net/wsClient.js";
 import type { PresenterSession } from "../session/presenterSession.js";
-import { startDesktopBroadcast, type BroadcastFactories, type BroadcastOptions } from "./broadcast.js";
+import { audioEncodingFor, startDesktopBroadcast, type BroadcastFactories, type BroadcastOptions } from "./broadcast.js";
+
+describe("audioEncodingFor", () => {
+  it("encodes the sound at the quality picked in the transmit dialog", () => {
+    expect(audioEncodingFor({ mode: "apps", exclude: [], quality: "light" })).toEqual({ bitrateKbps: 64, complexity: 5 });
+    expect(audioEncodingFor({ mode: "system", quality: "normal" })).toEqual({ bitrateKbps: 96, complexity: 10 });
+  });
+
+  it("keeps the old quality when none was picked", () => {
+    expect(audioEncodingFor({ mode: "system" })).toEqual({ bitrateKbps: 160, complexity: 10 });
+  });
+});
 
 const QUALITY = buildQualityPreset("720p", 30, "balanced");
 const TARGET = { roomId: "c1", guildId: "g1" };

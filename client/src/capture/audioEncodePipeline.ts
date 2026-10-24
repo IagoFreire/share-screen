@@ -4,6 +4,14 @@ import { createCaptureTimeline } from "./captureTimeline.js";
 
 export type EncodedAudioHandler = (chunk: EncodedAudioChunk) => void;
 
+/**
+ * Audio frames the track may hold while the page is busy. Chromium keeps 10 (~100 ms)
+ * by default and drops the oldest beyond that, so a slow CPU stalling the page behind
+ * the video encoders cut holes in the audio (measured: a 30-frame burst kept only its
+ * last 10). A second's worth costs well under a megabyte.
+ */
+const TRACK_BUFFER_FRAMES = 100;
+
 export interface AudioEncodePipeline {
   /** The parameters actually negotiated with the capture track, relayed to viewers
    *  so their decoder is configured identically. */
@@ -18,7 +26,14 @@ export interface AudioEncodePipeline {
 export interface AudioEncodeOptions {
   /** Added to every timestamp to put the audio on the video's clock (see clockOffset.ts). */
   timestampOffsetUs?: number;
+  /** Opus bitrate; TARGET_AUDIO_BITRATE_KBPS_DEFAULT when absent. */
+  bitrateKbps?: number;
+  /** Opus encoder effort, 0-10; 10 when absent. */
+  complexity?: number;
 }
+
+/** Max effort: for audio this costs little CPU (unlike video) and buys real quality. */
+const OPUS_COMPLEXITY_DEFAULT = 10;
 
 export async function startAudioEncodePipeline(
   track: MediaStreamTrack,
@@ -37,11 +52,10 @@ export async function startAudioEncodePipeline(
     codec: "opus",
     sampleRate: params.sampleRate,
     numberOfChannels: params.channels,
-    bitrate: TARGET_AUDIO_BITRATE_KBPS_DEFAULT * 1000,
+    bitrate: (options.bitrateKbps ?? TARGET_AUDIO_BITRATE_KBPS_DEFAULT) * 1000,
     opus: {
-      // Max encoder effort. For audio this costs very little CPU (unlike video) and
-      // buys real quality at a given bitrate.
-      complexity: 10,
+      // A slow PC can ask for less (see AUDIO_QUALITY_PRESETS).
+      complexity: options.complexity ?? OPUS_COMPLEXITY_DEFAULT,
       // DTX stops transmitting during silence. It saves bandwidth on speech but chops
       // quiet passages of music and adds artifacts on re-entry, so it stays off.
       usedtx: false,
@@ -79,7 +93,7 @@ export async function startAudioEncodePipeline(
   });
   encoder.configure(encoderConfig);
 
-  const processor = new MediaStreamTrackProcessor<AudioData>({ track });
+  const processor = new MediaStreamTrackProcessor<AudioData>({ track, maxBufferSize: TRACK_BUFFER_FRAMES });
   const reader = processor.readable.getReader();
 
   let stopped = false;

@@ -20,6 +20,21 @@ export const TARGET_VIDEO_BITRATE_KBPS_DEFAULT = 6000;
  */
 export const TARGET_AUDIO_BITRATE_KBPS_DEFAULT = 160;
 
+/** "Qualidade do som" in the desktop app's transmit dialog. */
+export type AudioQualityKey = "light" | "normal" | "high";
+
+/**
+ * Opus settings per choice. "high" is the long-standing default. "light" is for a slow
+ * PC or a weak upload: less bitrate, and complexity 5 spends less CPU on every packet.
+ */
+export const AUDIO_QUALITY_PRESETS: Record<AudioQualityKey, { bitrateKbps: number; complexity: number }> = {
+  light: { bitrateKbps: 64, complexity: 5 },
+  normal: { bitrateKbps: 96, complexity: 10 },
+  high: { bitrateKbps: TARGET_AUDIO_BITRATE_KBPS_DEFAULT, complexity: 10 },
+};
+
+export const AUDIO_QUALITY_DEFAULT: AudioQualityKey = "high";
+
 export const VIDEO_WIDTH_DEFAULT = 1920;
 export const VIDEO_HEIGHT_DEFAULT = 1080;
 export const VIDEO_FRAMERATE_DEFAULT = 60;

@@ -1,4 +1,4 @@
-import type { QualityPreset } from "@screenshare-bot/shared";
+import type { AudioQualityKey, QualityPreset } from "@screenshare-bot/shared";
 import type { VoiceState } from "./voicePoller.js";
 
 /**
@@ -22,9 +22,13 @@ export interface BroadcastTarget {
 
 /**
  * What the live carries as sound: nothing, the whole system mix (only when per-app
- * capture isn't available), or every app except the ones the user switched off.
+ * capture isn't available), or every app except the ones the user switched off -- at
+ * the "Qualidade do som" picked, AUDIO_QUALITY_DEFAULT when absent.
  */
-export type AudioChoice = { mode: "off" } | { mode: "system" } | { mode: "apps"; exclude: string[] };
+export type AudioChoice =
+  | { mode: "off" }
+  | { mode: "system"; quality?: AudioQualityKey }
+  | { mode: "apps"; exclude: string[]; quality?: AudioQualityKey };
 
 export interface LiveControllerDeps {
   startBroadcast(

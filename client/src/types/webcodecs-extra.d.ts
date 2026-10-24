@@ -7,6 +7,8 @@
 
 interface MediaStreamTrackProcessorInit {
   track: MediaStreamTrack;
+  /** Frames held for a slow reader before the oldest are dropped (Chromium: 10 for audio). */
+  maxBufferSize?: number;
 }
 
 declare class MediaStreamTrackProcessor<T = VideoFrame> {

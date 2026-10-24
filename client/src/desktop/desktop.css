@@ -1062,6 +1062,11 @@ body.desktop :focus-visible {
   transform: translateX(14px);
 }
 
+/* --- "Qualidade do som", between the switch and the app list --- */
+.desk-audio-quality {
+  margin-top: 10px;
+}
+
 /* --- Per-app audio list --- */
 .desk-apps {
   margin-top: 8px;
