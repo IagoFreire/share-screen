@@ -14,7 +14,7 @@ import { titleBar } from "./views/shell.js";
 import { confirmDialog, openTransmitModal } from "./views/transmitModal.js";
 
 /**
- * Entry point for desktop.html -- the page the ScreenShare desktop app (Electron)
+ * Entry point for desktop.html -- the page the Janja desktop app (Electron)
  * loads into its window. Outside the app there is no `window.desktop` bridge, so the
  * page only says where it belongs.
  */
@@ -30,7 +30,7 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
     alertAudio ??= new Audio(doorKnockUrl);
     alertAudio.currentTime = 0;
     alertAudio.play().catch((error: unknown) => console.error("Failed to play alert sound:", error));
-    if (document.hidden) api.notify("Alguém bateu na porta", "Abra o ScreenShare para ver.");
+    if (document.hidden) api.notify("Alguém bateu na porta", "Abra a Janja para ver.");
   }
 
   const live = createLiveController({
@@ -111,7 +111,7 @@ function main(): void {
   root.replaceChildren(titleBar(api?.windowControls ?? null), content);
 
   if (!api) {
-    content.replaceChildren(h("p", { class: "desk-outside" }, "Abra esta página pelo app ScreenShare."));
+    content.replaceChildren(h("p", { class: "desk-outside" }, "Abra esta página pelo app Janja."));
     return;
   }
   void boot(api, content);

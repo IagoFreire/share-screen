@@ -1,12 +1,26 @@
+import path from "node:path";
 import { Menu, nativeImage, Tray, type NativeImage } from "electron";
-import { drawTrayIcon } from "./tray";
+import { APP_NAME } from "./appIdentity";
+import { withLiveBadge } from "./tray";
 
-/** Drawn at 2x and tagged as such, so the tray stays crisp on scaled displays. */
+/** Janja: the window's icon and, with the live badge on top, the tray's. */
+export const APP_ICON_PATH = path.join(__dirname, "../../static/janja.png");
+
+/** Rendered at 2x and tagged as such, so the tray stays crisp on scaled displays. */
 const ICON_PIXELS = 32;
 const ICON_SCALE = 2;
 
+/** The icon at tray size as BGRA, read from disk once. */
+let iconBitmap: Buffer | null = null;
+
 function trayImage(live: boolean): NativeImage {
-  return nativeImage.createFromBitmap(drawTrayIcon(ICON_PIXELS, live), {
+  iconBitmap ??= nativeImage
+    .createFromPath(APP_ICON_PATH)
+    .resize({ width: ICON_PIXELS, height: ICON_PIXELS, quality: "best" })
+    .toBitmap();
+  // Unreadable icon: an empty tray image beats crashing the app on start.
+  if (iconBitmap.length !== ICON_PIXELS * ICON_PIXELS * 4) return nativeImage.createEmpty();
+  return nativeImage.createFromBitmap(withLiveBadge(iconBitmap, ICON_PIXELS, live), {
     width: ICON_PIXELS,
     height: ICON_PIXELS,
     scaleFactor: ICON_SCALE,
@@ -29,10 +43,10 @@ export function createAppTray(actions: AppTrayActions): AppTray {
 
   function render(live: boolean): void {
     tray.setImage(trayImage(live));
-    tray.setToolTip(live ? "ScreenShare — ao vivo" : "ScreenShare");
+    tray.setToolTip(live ? `${APP_NAME} — ao vivo` : APP_NAME);
     tray.setContextMenu(
       Menu.buildFromTemplate([
-        { label: "Abrir ScreenShare", click: actions.open },
+        { label: `Abrir ${APP_NAME}`, click: actions.open },
         { label: "Encerrar transmissão", enabled: live, click: actions.endLive },
         { type: "separator" },
         { label: "Sair", click: actions.quit },

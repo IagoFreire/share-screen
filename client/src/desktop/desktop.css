@@ -82,19 +82,12 @@ body.desktop :focus-visible {
   -webkit-app-region: drag;
 }
 
+/* Janja (assets/janja.png). */
 .desk-titlebar-mark {
-  display: grid;
-  place-items: center;
+  display: block;
   width: 18px;
   height: 18px;
   border-radius: 5px;
-  background: var(--desk-blurple);
-  color: #fff;
-}
-
-.desk-titlebar-mark svg {
-  width: 13px;
-  height: 13px;
 }
 
 .desk-winbtns {
@@ -679,21 +672,12 @@ body.desktop :focus-visible {
 }
 
 .desk-login-mark {
-  display: grid;
-  place-items: center;
+  display: block;
   width: 64px;
   height: 64px;
   margin: 0 auto 20px;
-  border-radius: 20px;
-  background: var(--desk-blurple);
-  color: #fff;
-  box-shadow: 0 10px 30px rgba(88, 101, 242, 0.45);
-}
-
-.desk-login-mark .desk-icon,
-.desk-login-mark svg {
-  width: 36px;
-  height: 36px;
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
 }
 
 .desk-login-title {

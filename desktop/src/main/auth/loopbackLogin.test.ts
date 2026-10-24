@@ -82,7 +82,7 @@ describe("runLoopbackLogin", () => {
 
     expect(await login).toEqual(RESPONSE);
     expect(d.exchanges).toEqual(["abc"]);
-    expect(await page.text()).toContain("Pode voltar ao ScreenShare");
+    expect(await page.text()).toContain("Pode voltar para a Janja");
   });
 
   it("a second callback after success is ignored", async () => {

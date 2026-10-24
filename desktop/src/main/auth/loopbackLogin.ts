@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import http from "node:http";
 import type { DesktopLoginResponse } from "@screenshare-bot/shared";
+import { APP_NAME } from "../appIdentity";
 
 /**
  * "Entrar com Discord" for the desktop app: Discord's consent page opens in the user's
@@ -50,7 +51,7 @@ export function parseCallback(requestUrl: string, expectedState: string): Callba
 }
 
 function browserPage(title: string, message: string): string {
-  return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>ScreenShare</title>
+  return `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>${APP_NAME}</title>
 <body style="margin:0;display:grid;place-items:center;height:100vh;background:#313338;color:#f2f3f5;font-family:'Segoe UI',system-ui,sans-serif">
 <main style="text-align:center"><h1 style="font-size:22px">${title}</h1><p style="color:#b5bac1">${message}</p></main></body></html>`;
 }
@@ -71,18 +72,18 @@ export function runLoopbackLogin(deps: LoopbackLoginDeps): Promise<DesktopLoginR
       }
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       if (settled) {
-        response.end(browserPage("Pronto!", "Pode voltar ao ScreenShare."));
+        response.end(browserPage("Pronto!", `Pode voltar para a ${APP_NAME}.`));
         return;
       }
 
       const result = parseCallback(url, state);
       if ("error" in result) {
-        response.end(browserPage("Login cancelado", "Volte ao ScreenShare para tentar de novo."));
+        response.end(browserPage("Login cancelado", `Volte para a ${APP_NAME} para tentar de novo.`));
         finish(() => reject(new Error("Login cancelado.")));
         return;
       }
 
-      response.end(browserPage("Pronto!", "Pode voltar ao ScreenShare."));
+      response.end(browserPage("Pronto!", `Pode voltar para a ${APP_NAME}.`));
       finish(() => {
         deps.exchange(result.code).then(resolve, (error: unknown) => {
           console.error("Desktop login exchange failed:", error);

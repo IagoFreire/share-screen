@@ -1,7 +1,7 @@
 /**
  * The pure half of the tray: what closing the window does, which notifications the
- * page may raise, and the tray icon itself. The icon is drawn in code rather than
- * shipped as image files, so idle/live variants at any DPI need no binary assets.
+ * page may raise, and the "ao vivo" badge drawn over the app icon (static/janja.png),
+ * so the live variant needs no second image.
  */
 
 export type CloseAction = "hide-to-tray" | "close";
@@ -23,57 +23,31 @@ export function isNotification(title: unknown, body: unknown): boolean {
   );
 }
 
-type Rgb = readonly [number, number, number];
+const LIVE_RED = [0xf2, 0x3f, 0x43] as const;
 
-const BLURPLE: Rgb = [0x58, 0x65, 0xf2];
-const WHITE: Rgb = [0xff, 0xff, 0xff];
-const LIVE_RED: Rgb = [0xf2, 0x3f, 0x43];
-
-/** Geometry on a 32-unit grid, scaled to the requested size. */
-const TILE_RADIUS = 7;
+/** Geometry on a 32-unit grid, scaled to the icon's size. */
 const BADGE_CENTER = 25;
 const BADGE_RADIUS = 6;
-/** Transparent gap around the badge so it reads against the tile. */
+/** Transparent gap around the badge so it reads against the icon. */
 const BADGE_GAP = 1.5;
 
-function insideRoundedSquare(x: number, y: number, size: number, radius: number): boolean {
-  const nearestX = Math.min(Math.max(x, radius), size - radius);
-  const nearestY = Math.min(Math.max(y, radius), size - radius);
-  return (x - nearestX) ** 2 + (y - nearestY) ** 2 <= radius ** 2;
-}
-
-/** The white monitor glyph: an outlined screen on a short stand. */
-function onScreenGlyph(u: number, v: number): boolean {
-  const inOuter = u >= 7 && u < 25 && v >= 9 && v < 21;
-  const inInner = u >= 9 && u < 23 && v >= 11 && v < 19;
-  const onStand = u >= 14 && u < 18 && v >= 21 && v < 23;
-  const onBase = u >= 11 && u < 21 && v >= 23 && v < 25;
-  return (inOuter && !inInner) || onStand || onBase;
-}
-
-/** A square BGRA bitmap for nativeImage.createFromBitmap. */
-export function drawTrayIcon(size: number, live: boolean): Buffer {
-  const bitmap = Buffer.alloc(size * size * 4);
+/**
+ * A copy of `icon` (square BGRA, as nativeImage.toBitmap() gives on Windows) with the
+ * red "ao vivo" dot in its bottom-right corner when `live`; an unchanged copy otherwise.
+ */
+export function withLiveBadge(icon: Buffer, size: number, live: boolean): Buffer {
+  const bitmap = Buffer.from(icon);
+  if (!live) return bitmap;
   const scale = size / 32;
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       // Pixel centers, in 32-unit grid coordinates.
-      const u = (x + 0.5) / scale;
-      const v = (y + 0.5) / scale;
-      const badgeDistance = Math.hypot(u - BADGE_CENTER, v - BADGE_CENTER);
-
-      let color: Rgb | null = null;
-      if (live && badgeDistance <= BADGE_RADIUS) color = LIVE_RED;
-      else if (live && badgeDistance <= BADGE_RADIUS + BADGE_GAP) color = null;
-      else if (insideRoundedSquare(u, v, 32, TILE_RADIUS)) color = onScreenGlyph(u, v) ? WHITE : BLURPLE;
-
-      if (!color) continue;
+      const distance = Math.hypot((x + 0.5) / scale - BADGE_CENTER, (y + 0.5) / scale - BADGE_CENTER);
+      if (distance > BADGE_RADIUS + BADGE_GAP) continue;
       const offset = (y * size + x) * 4;
-      bitmap[offset] = color[2];
-      bitmap[offset + 1] = color[1];
-      bitmap[offset + 2] = color[0];
-      bitmap[offset + 3] = 255;
+      if (distance <= BADGE_RADIUS) bitmap.set([LIVE_RED[2], LIVE_RED[1], LIVE_RED[0], 255], offset);
+      else bitmap.fill(0, offset, offset + 4);
     }
   }
   return bitmap;

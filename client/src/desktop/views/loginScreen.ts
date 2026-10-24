@@ -1,5 +1,6 @@
-import { h, icon } from "../dom.js";
-import { ICONS } from "./shell.js";
+// Fingerprinted by Vite, like desktop/main.ts's sound, so a changed image is never served stale.
+import janjaUrl from "../../../assets/janja.png";
+import { h } from "../dom.js";
 
 /**
  * First-run screen. The login itself happens in the user's browser (see the desktop
@@ -37,8 +38,8 @@ export function renderLoginScreen(container: HTMLElement, onLogin: () => Promise
       h(
         "div",
         { class: "desk-login-card" },
-        h("div", { class: "desk-login-mark" }, icon(ICONS.app)),
-        h("h1", { class: "desk-login-title" }, "Bem-vindo ao ScreenShare"),
+        h("img", { class: "desk-login-mark", src: janjaUrl, alt: "" }),
+        h("h1", { class: "desk-login-title" }, "Bem-vindo à Janja"),
         h(
           "p",
           { class: "desk-login-text" },

@@ -1,4 +1,6 @@
 import type { DesktopApi, DesktopUser } from "@screenshare-bot/shared";
+// Fingerprinted by Vite, like desktop/main.ts's sound, so a changed image is never served stale.
+import janjaUrl from "../../../assets/janja.png";
 import { avatar, h, icon, initials } from "../dom.js";
 import type { SidebarChannel, SidebarServer } from "../sidebarModel.js";
 import type { VoiceState } from "../voicePoller.js";
@@ -9,8 +11,10 @@ import type { VoiceState } from "../voicePoller.js";
  * restarts because the sidebar changed.
  */
 
+/** What the app is called on screen (the desktop main process says the same, appIdentity.ts). */
+const APP_NAME = "Janja";
+
 export const ICONS = {
-  app: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-6v2h3v1.5H7V20h3v-2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm0 2v9h16V7H4zm6 1.8 5 2.7-5 2.7V8.8z"/></svg>`,
   speaker: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.4 3.2a1 1 0 0 1 1.6.8v16a1 1 0 0 1-1.6.8L6.7 17H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2.7l4.7-3.8zM15.5 8.5a1 1 0 0 1 1.4 0 5 5 0 0 1 0 7 1 1 0 0 1-1.4-1.4 3 3 0 0 0 0-4.2 1 1 0 0 1 0-1.4zm2.8-2.8a1 1 0 0 1 1.4 0 9 9 0 0 1 0 12.6 1 1 0 0 1-1.4-1.4 7 7 0 0 0 0-9.8 1 1 0 0 1 0-1.4z"/></svg>`,
   screen: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-6v2h3v2H7v-2h3v-2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm0 2v10h16V6H4z"/></svg>`,
   logout: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 3h9a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-9v-2h9V5h-9V3zm1.6 4.4L13 6l6 6-6 6-1.4-1.4 3.6-3.6H3v-2h12.2l-3.6-3.6z" transform="matrix(-1 0 0 1 24 0)"/></svg>`,
@@ -27,8 +31,8 @@ export function titleBar(controls: DesktopApi["windowControls"] | null): HTMLEle
   return h(
     "header",
     { class: "desk-titlebar" },
-    h("span", { class: "desk-titlebar-mark" }, icon(ICONS.app)),
-    h("span", { class: "desk-titlebar-name" }, "ScreenShare"),
+    h("img", { class: "desk-titlebar-mark", src: janjaUrl, alt: "" }),
+    h("span", { class: "desk-titlebar-name" }, APP_NAME),
     controls &&
       h(
         "div",
@@ -79,7 +83,7 @@ export interface ChannelListOptions {
 }
 
 export function renderChannels(head: HTMLElement, list: HTMLElement, server: SidebarServer | null, options: ChannelListOptions): void {
-  head.replaceChildren(h("h2", { class: "desk-sidebar-title" }, server?.name ?? "ScreenShare"));
+  head.replaceChildren(h("h2", { class: "desk-sidebar-title" }, server?.name ?? APP_NAME));
   if (!server) {
     list.replaceChildren(h("p", { class: "desk-sidebar-hint" }, "Nenhum canal com transmissão por aqui."));
     return;
@@ -221,7 +225,7 @@ export function renderMainHeader(
   watching: MainHeaderWatching | null,
 ): void {
   if (voice.status !== "in-channel") {
-    container.replaceChildren(h("span", { class: "desk-main-title" }, "ScreenShare"));
+    container.replaceChildren(h("span", { class: "desk-main-title" }, APP_NAME));
     return;
   }
   const title = [

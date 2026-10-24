@@ -16,7 +16,8 @@ import { autoUpdater } from "electron-updater";
 import type { DesktopLoginResponse, StoredLogin } from "@screenshare-bot/shared";
 import { LOGIN_TIMEOUT_MS, runLoopbackLogin } from "./auth/loopbackLogin";
 import { createSessionStore } from "./auth/sessionStore";
-import { createAppTray, type AppTray } from "./appTray";
+import { APP_NAME, userDataPath } from "./appIdentity";
+import { APP_ICON_PATH, createAppTray, type AppTray } from "./appTray";
 import { decideCloseAction, isNotification } from "./tray";
 import { toIpcResult } from "./ipcResult";
 import { isExeName, listAudioApps, startAppAudio, type AppAudioCapture } from "./audioHelper";
@@ -114,7 +115,8 @@ function createMainWindow(): BrowserWindow {
     minHeight: 560,
     frame: false,
     backgroundColor: "#313338",
-    title: "ScreenShare",
+    title: APP_NAME,
+    icon: APP_ICON_PATH,
     show: false,
     webPreferences: mainWindowWebPreferences(path.join(__dirname, "../preload/index.js")),
   });
@@ -346,6 +348,12 @@ async function exchangeLoginCode(code: string): Promise<DesktopLoginResponse> {
   });
   if (!response.ok) throw new Error(`POST /api/desktop/login failed with HTTP ${response.status}.`);
   return (await response.json()) as DesktopLoginResponse;
+}
+
+// The data folder from before the rename (see appIdentity.ts) -- set before anything
+// reads it, the single-instance lock included. A dev run's --user-data-dir still wins.
+if (!app.commandLine.hasSwitch("user-data-dir")) {
+  app.setPath("userData", userDataPath(app.getPath("appData")));
 }
 
 // A second launch focuses the running app instead of opening another window.

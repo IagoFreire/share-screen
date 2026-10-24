@@ -1,9 +1,9 @@
 {
   "name": "@screenshare-bot/desktop",
-  "productName": "ScreenShare",
+  "productName": "Janja",
   "version": "0.3.0",
   "private": true,
-  "description": "ScreenShare desktop app for Windows",
+  "description": "Janja: lives de tela no Discord, app para Windows",
   "author": "Iago Freire",
   "main": "dist/main/index.js",
   "scripts": {
@@ -24,7 +24,7 @@
   },
   "build": {
     "appId": "dev.iagofreire.screenshare",
-    "productName": "ScreenShare",
+    "productName": "Janja",
     "electronVersion": "44.9.0",
     "directories": {
       "output": "release",
@@ -42,8 +42,8 @@
     "nsis": {
       "oneClick": true,
       "perMachine": false,
-      "shortcutName": "ScreenShare",
-      "artifactName": "ScreenShare-Setup-${version}.${ext}"
+      "shortcutName": "Janja",
+      "artifactName": "Janja-Setup-${version}.${ext}"
     },
     "publish": {
       "provider": "github",
