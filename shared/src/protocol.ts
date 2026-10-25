@@ -216,8 +216,10 @@ export type ControlMessage =
   | { kind: "streams-changed"; streams: StreamInfo[] }
   /** Client -> server: watch this slot and stop receiving whatever it was watching.
    *  A viewer receives exactly one stream at a time no matter how many are live;
-   *  `null` receives none ("Sair da live") until the viewer picks one again. */
-  | { kind: "select-stream"; slot: number | null }
+   *  `null` receives none ("Sair da live") until the viewer picks one again.
+   *  `preview` says a presenter opened their own broadcast on purpose: its picture
+   *  then keeps flowing for them (see audience-changed). */
+  | { kind: "select-stream"; slot: number | null; preview?: boolean }
   /**
    * Client -> server: which simulcast version this viewer wants. "auto" lets the relay
    * pick from what the viewer's connection keeps up with (see server/src/ws/autoLayer.ts).
@@ -244,10 +246,11 @@ export type ControlMessage =
   | { kind: "active-broadcasts"; broadcasts: ActiveBroadcast[] }
   | { kind: "viewer-count"; count: number }
   /**
-   * Server -> presenter: how many viewers receive this broadcast, not counting the
-   * presenter's own preview. With no watchers the presenter stops encoding and sending
-   * altogether, and with only audio-only ones it stops the video -- upload nobody would
-   * see. Sent on start and whenever either number changes.
+   * Server -> presenter: how many other people receive this broadcast (`watchers`), and
+   * how many viewers want its picture (`videoWatchers`, which also counts the presenter's
+   * own preview when they opened it on purpose). With no watchers the presenter stops
+   * sending audio, and with no video watchers it stops the video -- upload nobody would
+   * hear or see. Sent on start and whenever either number changes.
    */
   | { kind: "audience-changed"; watchers: number; videoWatchers: number }
   /** Viewer -> server, and server -> presenter; `layer` (to the presenter) names the encoder. */

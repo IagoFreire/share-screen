@@ -52,6 +52,16 @@ describe("autoWatchSlot", () => {
     expect(autoWatchSlot([stream(0, ME), stream(1, "b")], { preferred: null, userId: ME, hasLeft: false })).toBe(1);
   });
 
+  it("keeps the user's own broadcast once they opened it on purpose", () => {
+    const streams = [stream(0, ME), stream(1, "b")];
+
+    expect(autoWatchSlot(streams, { preferred: 0, userId: ME, hasLeft: false, ownPicked: true })).toBe(0);
+  });
+
+  it("moves on when the own broadcast that was opened ends", () => {
+    expect(autoWatchSlot([stream(1, "b")], { preferred: 0, userId: ME, hasLeft: false, ownPicked: true })).toBe(1);
+  });
+
   it("stays out after the user left the live", () => {
     expect(autoWatchSlot([stream(1, "b")], { preferred: null, userId: ME, hasLeft: true })).toBeNull();
   });

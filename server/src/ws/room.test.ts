@@ -45,6 +45,15 @@ describe("Room audiences", () => {
     expect(room.streams[0].paused).toBe(true);
   });
 
+  it("the presenter's own preview keeps the broadcast live", () => {
+    const room = new Room("c1", 10);
+    const slot = room.allocateSlot(presenterSocket, "42", null)!;
+
+    room.setAudience(slot, { watchers: 0, videoWatchers: 1 });
+
+    expect(room.isPaused(slot)).toBe(false);
+  });
+
   it("an audio-only audience keeps the broadcast live", () => {
     const room = new Room("c1", 10);
     const slot = room.allocateSlot(presenterSocket, "42", null)!;

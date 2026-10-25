@@ -231,6 +231,18 @@ describe("presenter session audience", () => {
     expect(frames.map((frame) => frame.header.type)).toEqual([FrameType.Audio]);
   });
 
+  it("sends only the picture for the presenter's own preview", async () => {
+    const { session, frames, emitVideo, emitAudio, videoPauses } = setup();
+    await session.start(QUALITY);
+
+    session.handleControl({ kind: "audience-changed", watchers: 0, videoWatchers: 1 });
+    emitVideo(fakeChunk([1], 1000, "key"));
+    emitAudio(fakeChunk([2], 1000));
+
+    expect(videoPauses).toEqual([]);
+    expect(frames.map((frame) => frame.header.type)).toEqual([FrameType.Video]);
+  });
+
   it("does not touch the encoders when only the number of watchers changes", async () => {
     const { session, videoPauses } = setup();
     await session.start(QUALITY);

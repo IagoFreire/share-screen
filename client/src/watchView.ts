@@ -187,6 +187,12 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   let lastLeftSlot: number | null = null;
   /** "Sair da live" was used and nothing picked since; skipOwn's own picks stay off. */
   let hasLeft = false;
+  /**
+   * The user opened their own broadcast on purpose (it never opens by itself, see
+   * skipOwnBroadcast): it stays on until they pick another, and the relay keeps its
+   * picture flowing for them (select-stream `preview`).
+   */
+  let ownPicked = false;
   /** Whether the join just sent asked to start on no broadcast (see sendJoin). */
   let joinWatchesNothing = false;
   /** Last value given to onWatchingChange, as "room:slot" ("" for none). */
@@ -290,7 +296,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     } else if (showOwnLiveOnlyUi) {
       idleTitle.textContent = "Você está transmitindo";
       idleSubtitle.textContent =
-        "Sua própria live não abre aqui, para não gastar sua internet. Quando outra pessoa transmitir, ela aparece aqui.";
+        "Sua live não abre sozinha aqui, para não gastar sua internet. Se quiser ver, clique nela na barra lateral.";
     } else if (showSelfPausedUi) {
       idleTitle.textContent = "Sua live está pausada";
       idleSubtitle.textContent = "Ninguém está assistindo, então ela não gasta sua internet. Volta sozinha quando alguém abrir.";
@@ -347,10 +353,18 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
    */
   function followAutoChoice(): boolean {
     if (!skipOwn) return false;
-    const slot = autoWatchSlot(streams, { preferred: selectedSlot, userId, hasLeft });
+    const slot = autoWatchSlot(streams, { preferred: selectedSlot, userId, hasLeft, ownPicked });
     if (slot === selectedSlot) return false;
     void selectStream(slot);
     return true;
+  }
+
+  const isOwnSlot = (slot: number | null) =>
+    slot !== null && streams.some((s) => s.slot === slot && isOwnStream(s, userId));
+
+  /** select-stream, flagged as a deliberate preview when it's the live the user opened of their own. */
+  function selectStreamMessage(slot: number | null): ControlMessage {
+    return ownPicked && isOwnSlot(slot) ? { kind: "select-stream", slot, preview: true } : { kind: "select-stream", slot };
   }
 
   /**
@@ -360,7 +374,8 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   async function selectStream(slot: number | null): Promise<void> {
     if (slot === selectedSlot) return;
     selectedSlot = slot;
-    wsClient.sendControl({ kind: "select-stream", slot });
+    if (!isOwnSlot(slot)) ownPicked = false;
+    wsClient.sendControl(selectStreamMessage(slot));
 
     teardownVideoPipeline();
     canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
@@ -385,8 +400,8 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
    * same socket re-joins, and the slot is selected once that join lands (pendingSlot).
    */
   async function openBroadcast(broadcast: ActiveBroadcast): Promise<void> {
-    if (skipOwn && isOwnStream(broadcast, userId)) return;
     hasLeft = false;
+    ownPicked = isOwnStream(broadcast, userId);
     if (broadcast.roomId === roomId) {
       await selectStream(broadcast.slot);
       return;
@@ -530,10 +545,10 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     selectedSlot = joinWatchesNothing ? null : (streams[0]?.slot ?? 0);
 
     let wanted = hop !== null && streams.some((s) => s.slot === hop) ? hop : selectedSlot;
-    if (skipOwn) wanted = autoWatchSlot(streams, { preferred: hop ?? previous, userId, hasLeft });
+    if (skipOwn) wanted = autoWatchSlot(streams, { preferred: hop ?? previous, userId, hasLeft, ownPicked });
     if (wanted === selectedSlot) return;
     selectedSlot = wanted;
-    wsClient.sendControl({ kind: "select-stream", slot: wanted });
+    wsClient.sendControl(selectStreamMessage(wanted));
   }
 
   async function handleControl(message: ControlMessage): Promise<void> {

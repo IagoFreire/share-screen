@@ -5,7 +5,7 @@ import "./desktop.css";
 // Fingerprinted by Vite, like present.ts's copy, so a changed sound is never served stale.
 import doorKnockUrl from "../../assets/DoorKnock.mp3";
 import type { DesktopApi, StoredLogin } from "@screenshare-bot/shared";
-import { startDesktopBroadcast } from "./broadcast.js";
+import { startDesktopBroadcast, type LiveAudience } from "./broadcast.js";
 import { h } from "./dom.js";
 import { relayWsUrl, startDesktopApp, type DesktopApp } from "./desktopApp.js";
 import { createLiveController } from "./liveController.js";
@@ -20,7 +20,7 @@ import { confirmDialog, openTransmitModal } from "./views/transmitModal.js";
  */
 
 function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin): void {
-  let viewerCount: number | null = null;
+  let audience: LiveAudience | null = null;
   /** One element, rewound per alert -- see present.ts's playAlertChime. */
   let alertAudio: HTMLAudioElement | null = null;
   // Assigned right below; the hooks only run after the app has started.
@@ -42,8 +42,8 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
         audio,
         appAudio: api.appAudio,
         selectSource: (id, options) => api.selectSource(id, options),
-        onAudience: (watchers) => {
-          viewerCount = watchers;
+        onAudience: (next) => {
+          audience = next;
           app?.refreshUserPanel();
         },
         onAlert: playKnock,
@@ -74,12 +74,12 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
       });
     },
     isLive: () => live.isLive,
-    viewerCount: () => (live.isLive ? viewerCount : null),
+    audience: () => (live.isLive ? audience : null),
     beforeLogout: () => live.end(),
   });
 
   live.onChange(() => {
-    if (!live.isLive) viewerCount = null;
+    if (!live.isLive) audience = null;
     app?.refreshUserPanel();
   });
   app.onVoiceChange((voice) => void live.onVoiceState(voice));

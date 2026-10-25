@@ -60,6 +60,9 @@ interface ConnectionState {
   /** True when this viewer asked to stop receiving video ("only audio", e.g. to
    *  listen along to music without watching). Audio keeps flowing regardless. */
   videoDisabled: boolean;
+  /** A presenter watching their own broadcast because they opened it on purpose (see
+   *  select-stream `preview`); its picture keeps flowing for them. */
+  ownPreview: boolean;
   /** Which simulcast version this viewer asked for; "auto" lets autoLayer.ts decide. */
   layerChoice: number | "auto";
   /** The automatic choice for the watched broadcast, rebuilt when its layer count changes. */
@@ -81,6 +84,7 @@ function getState(ws: WebSocket): ConnectionState {
       hasReceivedKeyframe: false,
       isPaused: false,
       videoDisabled: false,
+      ownPreview: false,
       layerChoice: "auto",
       autoLayer: null,
       autoLayerCount: 0,
@@ -375,6 +379,7 @@ async function handleJoin(
   // Default to the lowest live slot so a viewer joining mid-broadcast sees something
   // immediately rather than an empty player until they pick from the list.
   state.selectedSlot = startsWatchingNothing(message) ? null : (room.streams[0]?.slot ?? SLOT_PRESENTER);
+  state.ownPreview = false; // a default pick is never a deliberate one
   state.hasReceivedKeyframe = false;
 
   if (userId && pausesSiblingConnections(message)) pauseOtherConnectionsForUser(room, userId, ws);
@@ -467,6 +472,7 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       const slot = message.slot;
       if (slot !== null && !Number.isInteger(slot)) return;
       state.selectedSlot = slot;
+      state.ownPreview = slot !== null && message.preview === true;
       state.autoLayer = null; // the new broadcast's "auto" starts over from its best layer
       announceLayer(ws, state, room); // new stream, decoder starts cold
       refreshAudiences(room); // the old broadcast may have lost its last viewer, the new one gained one
@@ -567,6 +573,7 @@ function handleSlotWentAway(room: Room, freedSlot: number): void {
     if (viewerState.selectedSlot !== freedSlot) return;
 
     viewerState.hasReceivedKeyframe = false;
+    viewerState.ownPreview = false; // whatever comes next, they didn't pick it
     if (fallback !== null) viewerState.selectedSlot = fallback;
   });
 

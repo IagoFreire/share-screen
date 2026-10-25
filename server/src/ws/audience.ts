@@ -13,26 +13,33 @@ export interface ViewerSelection {
   isPaused: boolean;
   /** Audio-only: wants the sound but not the picture. */
   videoDisabled: boolean;
+  /** The presenter opened their own broadcast on purpose (select-stream `preview`). */
+  ownPreview: boolean;
 }
 
 export interface Audience {
-  /** Viewers receiving the broadcast at all. */
+  /** Other people receiving the broadcast at all. */
   watchers: number;
-  /** Those of them that also want its video; the rest only listen. */
+  /** Viewers that want its video: those watchers who aren't audio-only, plus the
+   *  presenter's own deliberate preview. */
   videoWatchers: number;
 }
 
 /**
- * Counts the viewers of the broadcast on `slot`. The presenter's own preview is left
- * out: it would otherwise keep every broadcast running just so its presenter can watch
- * themselves, which is exactly the upload this exists to save.
+ * Counts the viewers of the broadcast on `slot`. The presenter's own preview is no
+ * audience: it would otherwise keep every broadcast running just so its presenter can
+ * watch themselves, which is exactly the upload this exists to save. One they opened
+ * on purpose still gets the picture (never the sound, which is never played back).
  */
 export function countAudience(viewers: Iterable<ViewerSelection>, slot: number, presenterId: string | null): Audience {
   let watchers = 0;
   let videoWatchers = 0;
   for (const viewer of viewers) {
     if (viewer.isPaused || viewer.selectedSlot !== slot) continue;
-    if (presenterId !== null && viewer.userId === presenterId) continue;
+    if (presenterId !== null && viewer.userId === presenterId) {
+      if (viewer.ownPreview && !viewer.videoDisabled) videoWatchers += 1;
+      continue;
+    }
     watchers += 1;
     if (!viewer.videoDisabled) videoWatchers += 1;
   }

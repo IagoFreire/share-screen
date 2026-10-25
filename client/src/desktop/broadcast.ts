@@ -36,6 +36,16 @@ const JOIN_TIMEOUT_MS = 10_000;
 
 const DROPPED_MESSAGE = "A conexão com o servidor caiu e a transmissão foi encerrada.";
 
+/**
+ * Who receives a live: other people (`watchers`) and everyone who wants its picture
+ * (`videoWatchers`, which includes your own preview when you opened it). Both at 0
+ * means it is paused, sending nothing.
+ */
+export interface LiveAudience {
+  watchers: number;
+  videoWatchers: number;
+}
+
 export interface BroadcastOptions {
   wsUrl: string;
   userId: string;
@@ -44,8 +54,8 @@ export interface BroadcastOptions {
   /** Per-app capture (the bundled helper); used when `audio.mode` is "apps". */
   appAudio: DesktopAppAudio | null;
   selectSource(id: string, options: { audio: boolean }): Promise<void>;
-  /** How many people receive this broadcast; at 0 it is paused (see audience-changed). */
-  onAudience(watchers: number): void;
+  /** Who receives this broadcast (see audience-changed). */
+  onAudience(audience: LiveAudience): void;
   /** Someone used "bater na porta" on this broadcast. */
   onAlert(): void;
   /** The broadcast ended because of the relay or the network, not the user. */
@@ -164,7 +174,9 @@ export async function startDesktopBroadcast(
 
   onControl = (message) => {
     // The session pauses itself on it; the count is still ours to show.
-    if (message.kind === "audience-changed") options.onAudience(message.watchers);
+    if (message.kind === "audience-changed") {
+      options.onAudience({ watchers: message.watchers, videoWatchers: message.videoWatchers });
+    }
     if (session.handleControl(message)) return;
     if (message.kind === "play-alert") options.onAlert();
     else if (message.kind === "error") finish({ interrupted: `A transmissão foi encerrada: ${message.message}` });

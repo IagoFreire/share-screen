@@ -63,9 +63,10 @@ export class Room {
       }));
   }
 
-  /** True once the broadcast on `slot` is known to have nobody watching it. */
+  /** True once the broadcast on `slot` is known to send nothing: no sound, no picture. */
   isPaused(slot: number): boolean {
-    return this.presenters.get(slot)?.audience?.watchers === 0;
+    const audience = this.presenters.get(slot)?.audience;
+    return audience?.watchers === 0 && audience.videoWatchers === 0;
   }
 
   /**

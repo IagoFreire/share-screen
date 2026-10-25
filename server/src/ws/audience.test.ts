@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { countAudience, type ViewerSelection } from "./audience.js";
 
 function viewer(overrides: Partial<ViewerSelection> = {}): ViewerSelection {
-  return { userId: "7", selectedSlot: 0, isPaused: false, videoDisabled: false, ...overrides };
+  return { userId: "7", selectedSlot: 0, isPaused: false, videoDisabled: false, ownPreview: false, ...overrides };
 }
 
 describe("countAudience", () => {
@@ -23,6 +23,14 @@ describe("countAudience", () => {
 
   it("does not let the presenter's own preview keep the broadcast running", () => {
     expect(countAudience([viewer({ userId: "42" })], 0, "42")).toEqual({ watchers: 0, videoWatchers: 0 });
+  });
+
+  it("sends the picture to a presenter who opened their own live on purpose", () => {
+    // Not an audience (nobody else hears it), but the preview needs the video.
+    expect(countAudience([viewer({ userId: "42", ownPreview: true })], 0, "42")).toEqual({
+      watchers: 0,
+      videoWatchers: 1,
+    });
   });
 
   it("still counts anonymous viewers when the presenter is anonymous too", () => {

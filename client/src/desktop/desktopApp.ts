@@ -1,5 +1,6 @@
 import type { ActiveBroadcast, DesktopApi, StoredLogin } from "@screenshare-bot/shared";
 import { mountWatchView, type WatchView } from "../watchView.js";
+import type { LiveAudience } from "./broadcast.js";
 import { h } from "./dom.js";
 import { buildSidebarModel, type SidebarChannel } from "./sidebarModel.js";
 import { createVoicePoller, VOICE_POLL_INTERVAL_MS, type VoiceState } from "./voicePoller.js";
@@ -25,7 +26,8 @@ export interface DesktopAppHooks {
   /** Wired by the go-live controller (transmit modal); null until then. */
   onTransmit: (() => void) | null;
   isLive: () => boolean;
-  viewerCount: () => number | null;
+  /** Who receives your live; null while not live or before the relay says. */
+  audience: () => LiveAudience | null;
   /** Runs before logging out (which reloads the page), so a live broadcast ends cleanly. */
   beforeLogout: () => void;
 }
@@ -100,7 +102,7 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
       user: login.user,
       voice: state.voice,
       isLive: hooks.isLive(),
-      viewerCount: hooks.viewerCount(),
+      audience: hooks.audience(),
       onTransmit: () => hooks.onTransmit?.(),
       onLogout: () => void logOut(),
     });

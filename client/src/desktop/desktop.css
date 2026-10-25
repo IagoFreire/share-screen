@@ -332,16 +332,6 @@ body.desktop :focus-visible {
   color: var(--desk-text);
 }
 
-/* Your own live: listed so you see it's on, but not something to open. A div, so it
-   needs the border-box sizing a button gets from the browser, or the padding overflows. */
-.desk-presenter.is-self,
-.desk-presenter.is-self:hover {
-  box-sizing: border-box;
-  background: transparent;
-  color: var(--desk-text-muted);
-  cursor: default;
-}
-
 .desk-presenter-avatar {
   flex: 0 0 auto;
   display: grid;

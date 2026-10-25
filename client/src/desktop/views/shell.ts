@@ -1,4 +1,5 @@
 import type { DesktopApi, DesktopUser } from "@screenshare-bot/shared";
+import type { LiveAudience } from "../broadcast.js";
 // Fingerprinted by Vite, like desktop/main.ts's sound, so a changed image is never served stale.
 import janjaUrl from "../../../assets/janja.png";
 import { avatar, h, icon, initials } from "../dom.js";
@@ -77,7 +78,7 @@ export function renderRail(
 export interface ChannelListOptions {
   /** The broadcast on screen, highlighted in the list. */
   watching: { roomId: string; slot: number } | null;
-  /** The logged-in user: their own live is listed but can't be opened (see skipOwnBroadcast). */
+  /** The logged-in user: their own live never opens by itself, only from here. */
   selfUserId: string;
   onPick(channel: SidebarChannel, slot: number): void;
 }
@@ -103,15 +104,7 @@ export function renderChannels(head: HTMLElement, list: HTMLElement, server: Sid
           channel.isMine && h("span", { class: "desk-channel-here", title: "Você está neste canal" }, "você"),
         ),
         ...channel.presenters.map((presenter) => {
-          if (presenter.userId === options.selfUserId) {
-            return h(
-              "div",
-              { class: "desk-presenter is-self", title: "Sua live não abre aqui, para não gastar sua internet" },
-              avatar(presenter.name, null, presenter.userId, "desk-presenter-avatar"),
-              h("span", { class: "desk-presenter-name" }, `${presenter.name} (você)`),
-              h("span", { class: "desk-live" }, "AO VIVO"),
-            );
-          }
+          const isSelf = presenter.userId === options.selfUserId;
           const isWatching =
             options.watching?.roomId === channel.channelId && options.watching.slot === presenter.slot;
           return h(
@@ -119,11 +112,11 @@ export function renderChannels(head: HTMLElement, list: HTMLElement, server: Sid
             {
               class: `desk-presenter${isWatching ? " is-watching" : ""}`,
               type: "button",
-              title: `Assistir ${presenter.name}`,
+              title: isSelf ? "Ver sua live (enquanto estiver aberta, ela usa sua internet)" : `Assistir ${presenter.name}`,
               onClick: () => options.onPick(channel, presenter.slot),
             },
             avatar(presenter.name, null, presenter.userId ?? presenter.name, "desk-presenter-avatar"),
-            h("span", { class: "desk-presenter-name" }, presenter.name),
+            h("span", { class: "desk-presenter-name" }, isSelf ? `${presenter.name} (você)` : presenter.name),
             h("span", { class: "desk-live" }, "AO VIVO"),
           );
         }),
@@ -136,8 +129,8 @@ export interface UserPanelOptions {
   user: DesktopUser;
   voice: VoiceState;
   isLive: boolean;
-  /** People receiving your live (your own preview not counted); null until the relay says. */
-  viewerCount: number | null;
+  /** Who receives your live; null until the relay says. */
+  audience: LiveAudience | null;
   onTransmit(): void;
   onLogout(): void;
 }
@@ -149,15 +142,17 @@ function voiceLabel(voice: VoiceState): string {
 }
 
 /** A live nobody watches sends nothing until someone opens it (see audience-changed). */
-function liveLabel(viewerCount: number): string {
-  return viewerCount === 0 ? "Pausada: ninguém assistindo" : `Ao vivo · ${viewerCount} assistindo`;
+function liveLabel(audience: LiveAudience): string {
+  if (audience.watchers > 0) return `Ao vivo · ${audience.watchers} assistindo`;
+  return audience.videoWatchers > 0 ? "Ao vivo · só você assistindo" : "Pausada: ninguém assistindo";
 }
 
 export function renderUserPanel(container: HTMLElement, options: UserPanelOptions): void {
   const name = options.user.globalName ?? options.user.username;
   const inVoice = options.voice.status === "in-channel";
   const transmitLabel = options.isLive ? "Encerrar transmissão" : "Transmitir";
-  const isPausedLive = options.isLive && options.viewerCount === 0;
+  const audience = options.isLive ? options.audience : null;
+  const isPausedLive = audience !== null && audience.watchers === 0 && audience.videoWatchers === 0;
 
   container.replaceChildren(
     h(
@@ -179,7 +174,7 @@ export function renderUserPanel(container: HTMLElement, options: UserPanelOption
             class: "desk-user-status",
             title: isPausedLive ? "Sua live não gasta sua internet enquanto ninguém assiste. Volta sozinha quando alguém abrir." : undefined,
           },
-          options.isLive && options.viewerCount !== null ? liveLabel(options.viewerCount) : voiceLabel(options.voice),
+          audience !== null ? liveLabel(audience) : voiceLabel(options.voice),
         ),
       ),
       h(
