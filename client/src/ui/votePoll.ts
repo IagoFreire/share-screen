@@ -1,16 +1,22 @@
 import "./votePoll.css";
-// Fingerprinted by Vite, like the other desktop assets, so a changed photo is never served stale.
-import lulaUrl from "../../../assets/poll-lula.png";
-import flavioUrl from "../../../assets/poll-flavio.png";
-import { h } from "../dom.js";
+// Fingerprinted by Vite, like the other assets, so a changed photo is never served stale.
+import lulaUrl from "../../assets/poll-lula.png";
+import flavioUrl from "../../assets/poll-flavio.png";
+import urnaUrl from "../../assets/urna.mp3";
+import { h } from "../desktop/dom.js";
 
 /**
- * The "em quem você votou?" gate the desktop app shows every time it opens: a
- * second-round duel screen. Nothing is stored or sent anywhere; the answer only
- * decides whether the app opens (Bolsonaro) or closes (Lula).
+ * The "em quem você votou?" gate shown every time the desktop app or the Discord
+ * Activity opens: a second-round duel screen. Nothing is stored or sent anywhere; the
+ * answer only decides whether the app opens (Bolsonaro) or closes (Lula).
  */
 
 export type Vote = "lula" | "bolsonaro";
+
+export interface VotePollOptions {
+  /** What opens or closes, as the screens say it: "a Janja", "a live". */
+  noun: string;
+}
 
 /** How long the urna's "FIM" stays up before the app opens. */
 const CONFIRM_MS = 1400;
@@ -29,7 +35,7 @@ const LULA: Candidate = { vote: "lula", name: "Lula", party: "PT", number: "13",
 const FLAVIO: Candidate = { vote: "bolsonaro", name: "Flávio Bolsonaro", party: "PL", number: "22", photo: flavioUrl };
 
 /** Shows the poll in `container`; resolves with the answer once its closing screen has played. */
-export function askVote(container: HTMLElement): Promise<Vote> {
+export function askVote(container: HTMLElement, options: VotePollOptions): Promise<Vote> {
   return new Promise((resolve) => {
     let chosen = false;
 
@@ -63,7 +69,7 @@ export function askVote(container: HTMLElement): Promise<Vote> {
         { class: "poll-head" },
         h("p", { class: "poll-kicker" }, h("span", { class: "poll-dot", "aria-hidden": "true" }), "Eleições 2026 · 2º turno"),
         h("h1", { class: "poll-title" }, "Em quem você votou?"),
-        h("p", { class: "poll-sub" }, "Responda para entrar na Janja."),
+        h("p", { class: "poll-sub" }, `Responda para entrar n${options.noun}.`),
       ),
       h(
         "div",
@@ -78,9 +84,18 @@ export function askVote(container: HTMLElement): Promise<Vote> {
     function choose(vote: Vote): void {
       if (chosen) return;
       chosen = true;
+      playUrna();
       stage.classList.add(`is-chosen-${vote}`);
       if (vote === "bolsonaro") confirm();
       else farewell();
+    }
+
+    /**
+     * The urna's end-of-vote beep (~1 s), on either answer. Both screens that follow
+     * outlast it, and the click that cast the vote lets the page play sound.
+     */
+    function playUrna(): void {
+      new Audio(urnaUrl).play().catch((error: unknown) => console.error("Failed to play the urna sound:", error));
     }
 
     /** The urna's end screen, then the app. */
@@ -99,12 +114,13 @@ export function askVote(container: HTMLElement): Promise<Vote> {
     /** A short goodbye with a countdown, then the app closes. */
     function farewell(): void {
       const count = h("span", { class: "poll-count" }, String(FAREWELL_SECONDS));
+      const noun = options.noun.charAt(0).toUpperCase() + options.noun.slice(1);
       stage.append(
         h(
           "div",
           { class: "poll-result is-lula", role: "status" },
           h("strong", { class: "poll-bye" }, "Aqui não, companheiro."),
-          h("p", { class: "poll-bye-sub" }, "A Janja fecha em ", count, "…"),
+          h("p", { class: "poll-bye-sub" }, `${noun} fecha em `, count, "…"),
         ),
       );
       let left = FAREWELL_SECONDS;
@@ -117,4 +133,15 @@ export function askVote(container: HTMLElement): Promise<Vote> {
       }, 1000);
     }
   });
+}
+
+/** askVote over the whole page, for hosts without a full-size container (the Activity). */
+export async function askVoteFullScreen(options: VotePollOptions): Promise<Vote> {
+  const host = h("div", { class: "poll-host" });
+  document.body.append(host);
+  try {
+    return await askVote(host, options);
+  } finally {
+    host.remove();
+  }
 }

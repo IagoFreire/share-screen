@@ -1,8 +1,23 @@
-/* "Em quem você votou?" -- the second-round duel shown when the desktop app opens. */
+/* "Em quem você votou?" -- the second-round duel shown when the desktop app or the
+   Activity opens. Self-contained: it brings its own colours, since the Activity has no
+   desktop.css. */
+
+/* The Activity has no full-size container of its own (see askVoteFullScreen). */
+.poll-host {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+}
+
 .poll {
   --poll-red: #e5383b;
   --poll-blue: #2f49c4;
   --poll-serif: Georgia, "Times New Roman", serif;
+  --poll-text: #f2f3f5;
+  --poll-muted: #b5bac1;
+  --poll-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  font-family: var(--desk-font, "gg sans", "Segoe UI", system-ui, sans-serif);
   position: relative;
   flex: 1 1 auto;
   display: grid;
@@ -10,7 +25,7 @@
   min-height: 0;
   overflow: hidden;
   background: #09090b;
-  color: var(--desk-text);
+  color: var(--poll-text);
 }
 
 .poll-head {
@@ -30,7 +45,7 @@
   font-weight: 700;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--desk-text-muted);
+  color: var(--poll-muted);
 }
 
 .poll-dot {
@@ -52,7 +67,7 @@
 .poll-sub {
   margin: 0;
   font-size: 14px;
-  color: var(--desk-text-muted);
+  color: var(--poll-muted);
 }
 
 /* --- The two halves --- */
@@ -85,7 +100,7 @@
   color: inherit;
   font: inherit;
   cursor: pointer;
-  transition: filter 260ms var(--desk-ease), opacity 260ms var(--desk-ease);
+  transition: filter 260ms var(--poll-ease), opacity 260ms var(--poll-ease);
 }
 
 /* Bottom shade so the name always reads over the photo. */
@@ -102,7 +117,7 @@
   position: absolute;
   inset: 0;
   opacity: 0.55;
-  transition: opacity 260ms var(--desk-ease);
+  transition: opacity 260ms var(--poll-ease);
 }
 
 .poll-side.is-lula .poll-glow {
@@ -122,7 +137,7 @@
   font-weight: 700;
   line-height: 1;
   color: rgba(255, 255, 255, 0.05);
-  transition: color 260ms var(--desk-ease);
+  transition: color 260ms var(--poll-ease);
   pointer-events: none;
 }
 
@@ -142,7 +157,7 @@
   max-width: none;
   transform: translateX(-50%);
   transform-origin: 50% 100%;
-  transition: transform 400ms var(--desk-ease);
+  transition: transform 400ms var(--poll-ease);
   filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.6));
   pointer-events: none;
 }
@@ -178,7 +193,7 @@
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.14em;
-  color: var(--desk-text-muted);
+  color: var(--poll-muted);
 }
 
 .poll-cta {
@@ -191,7 +206,7 @@
   text-shadow: none;
   opacity: 0;
   transform: translateY(8px);
-  transition: opacity 200ms var(--desk-ease), transform 200ms var(--desk-ease);
+  transition: opacity 200ms var(--poll-ease), transform 200ms var(--poll-ease);
 }
 
 .poll-side.is-lula .poll-cta {
@@ -251,7 +266,7 @@
   background: #111114;
   font-family: var(--poll-serif);
   font-size: 24px;
-  color: var(--desk-text-muted);
+  color: var(--poll-muted);
   transform: translate(-50%, -50%);
   pointer-events: none;
 }
@@ -272,7 +287,7 @@
   justify-items: center;
   gap: 10px;
   text-align: center;
-  animation: poll-in 240ms var(--desk-ease) both;
+  animation: poll-in 240ms var(--poll-ease) both;
 }
 
 /* The urna's grey-green LCD with its "FIM". */
@@ -309,12 +324,12 @@
 .poll-bye-sub {
   margin: 0;
   font-size: 16px;
-  color: var(--desk-text-muted);
+  color: var(--poll-muted);
 }
 
 .poll-count {
   font-weight: 700;
-  color: var(--desk-text);
+  color: var(--poll-text);
 }
 
 @keyframes poll-pulse {

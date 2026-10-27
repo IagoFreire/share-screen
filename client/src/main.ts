@@ -3,8 +3,10 @@
 // this module makes the CSS update whenever the JS does, and Vite content-hashes it in
 // production builds. (Dev responses are additionally marked no-store; see vite.config.ts.)
 import "./ui/app.css";
-import { bootstrapDiscordSdk } from "./discord/sdkBootstrap.js";
+import { RPCCloseCodes } from "@discord/embedded-app-sdk";
+import { bootstrapDiscordSdk, getDiscordSdk } from "./discord/sdkBootstrap.js";
 import { mountApp } from "./ui/App.js";
+import { askVoteFullScreen } from "./ui/votePoll.js";
 
 async function main(): Promise<void> {
   const statusEl = document.querySelector<HTMLParagraphElement>("#status");
@@ -16,6 +18,13 @@ async function main(): Promise<void> {
 
   try {
     const auth = await bootstrapDiscordSdk();
+
+    // Same poll as the desktop app (ui/votePoll.ts); a Lula vote closes the Activity.
+    setStatus("");
+    if ((await askVoteFullScreen({ noun: "a live" })) === "lula") {
+      getDiscordSdk().close(RPCCloseCodes.CLOSE_NORMAL, "Aqui não, companheiro.");
+      return;
+    }
 
     // Room id is derived from the voice channel the Activity was launched in, so
     // everyone in the same call lands in the same room automatically. Falls back
