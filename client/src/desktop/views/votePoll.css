@@ -1,0 +1,340 @@
+/* "Em quem você votou?" -- the second-round duel shown when the desktop app opens. */
+.poll {
+  --poll-red: #e5383b;
+  --poll-blue: #2f49c4;
+  --poll-serif: Georgia, "Times New Roman", serif;
+  position: relative;
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+  overflow: hidden;
+  background: #09090b;
+  color: var(--desk-text);
+}
+
+.poll-head {
+  position: relative;
+  z-index: 3;
+  padding: 26px 16px 0;
+  text-align: center;
+  pointer-events: none;
+}
+
+.poll-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--desk-text-muted);
+}
+
+.poll-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--poll-red);
+  animation: poll-pulse 1.6s ease-in-out infinite;
+}
+
+.poll-title {
+  margin: 10px 0 6px;
+  font-family: var(--poll-serif);
+  font-size: clamp(32px, 4.4vw, 56px);
+  font-weight: 700;
+  line-height: 1.05;
+}
+
+.poll-sub {
+  margin: 0;
+  font-size: 14px;
+  color: var(--desk-text-muted);
+}
+
+/* --- The two halves --- */
+.poll-duel {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 0;
+}
+
+.poll-duel::before {
+  content: "";
+  position: absolute;
+  top: 8%;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: linear-gradient(transparent, rgba(255, 255, 255, 0.16) 30%, rgba(255, 255, 255, 0.16));
+  z-index: 2;
+  pointer-events: none;
+}
+
+.poll-side {
+  position: relative;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: filter 260ms var(--desk-ease), opacity 260ms var(--desk-ease);
+}
+
+/* Bottom shade so the name always reads over the photo. */
+.poll-side::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 42%;
+  background: linear-gradient(transparent, rgba(5, 5, 7, 0.92));
+  pointer-events: none;
+}
+
+.poll-glow {
+  position: absolute;
+  inset: 0;
+  opacity: 0.55;
+  transition: opacity 260ms var(--desk-ease);
+}
+
+.poll-side.is-lula .poll-glow {
+  background: radial-gradient(ellipse 70% 75% at 50% 70%, rgba(229, 56, 59, 0.6), transparent 70%);
+}
+
+.poll-side.is-bolsonaro .poll-glow {
+  background: radial-gradient(ellipse 70% 75% at 50% 70%, rgba(47, 73, 196, 0.65), transparent 70%);
+}
+
+/* The urna number, huge and faint behind each photo. */
+.poll-number {
+  position: absolute;
+  top: -2%;
+  font-family: var(--poll-serif);
+  font-size: clamp(160px, 24vw, 320px);
+  font-weight: 700;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.05);
+  transition: color 260ms var(--desk-ease);
+  pointer-events: none;
+}
+
+.poll-side.is-lula .poll-number {
+  left: 4%;
+}
+
+.poll-side.is-bolsonaro .poll-number {
+  right: 4%;
+}
+
+.poll-photo {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  height: 94%;
+  max-width: none;
+  transform: translateX(-50%);
+  transform-origin: 50% 100%;
+  transition: transform 400ms var(--desk-ease);
+  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.6));
+  pointer-events: none;
+}
+
+.poll-tag {
+  position: absolute;
+  bottom: 26px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+}
+
+.poll-side.is-lula .poll-tag {
+  left: 32px;
+  align-items: flex-start;
+}
+
+.poll-side.is-bolsonaro .poll-tag {
+  right: 32px;
+  align-items: flex-end;
+}
+
+.poll-name {
+  font-family: var(--poll-serif);
+  font-size: clamp(30px, 3.6vw, 48px);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.poll-party {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--desk-text-muted);
+}
+
+.poll-cta {
+  margin-top: 12px;
+  padding: 10px 20px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: none;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 200ms var(--desk-ease), transform 200ms var(--desk-ease);
+}
+
+.poll-side.is-lula .poll-cta {
+  background: var(--poll-red);
+}
+
+.poll-side.is-bolsonaro .poll-cta {
+  background: var(--poll-blue);
+}
+
+/* Hovering one side lights it up and puts the other in the dark. */
+.poll-side:hover .poll-glow,
+.poll-side:focus-visible .poll-glow {
+  opacity: 1;
+}
+
+.poll-side:hover .poll-number,
+.poll-side:focus-visible .poll-number {
+  color: rgba(255, 255, 255, 0.1);
+}
+
+.poll-side:hover .poll-photo,
+.poll-side:focus-visible .poll-photo {
+  transform: translateX(-50%) scale(1.04);
+}
+
+.poll-side:hover .poll-cta,
+.poll-side:focus-visible .poll-cta {
+  opacity: 1;
+  transform: none;
+}
+
+.poll-duel:has(.poll-side:hover) .poll-side:not(:hover) {
+  filter: grayscale(0.9) brightness(0.45);
+}
+
+.poll-side:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: -3px;
+}
+
+.poll-side:active .poll-photo {
+  transform: translateX(-50%) scale(1.02);
+}
+
+.poll-versus {
+  position: absolute;
+  top: 46%;
+  left: 50%;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 50%;
+  background: #111114;
+  font-family: var(--poll-serif);
+  font-size: 24px;
+  color: var(--desk-text-muted);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* Once chosen, the other side fades out under the result screen. */
+.poll.is-chosen-lula .poll-side.is-bolsonaro,
+.poll.is-chosen-bolsonaro .poll-side.is-lula {
+  opacity: 0.15;
+}
+
+/* --- Result screens --- */
+.poll-result {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  text-align: center;
+  animation: poll-in 240ms var(--desk-ease) both;
+}
+
+/* The urna's grey-green LCD with its "FIM". */
+.poll-result.is-bolsonaro {
+  background: #d9dccb;
+  color: #141414;
+}
+
+.poll-urna-label {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+}
+
+.poll-urna-fim {
+  font-family: "Arial Black", "Segoe UI", sans-serif;
+  font-size: clamp(120px, 20vw, 220px);
+  line-height: 1;
+  letter-spacing: 0.04em;
+}
+
+.poll-result.is-lula {
+  background:
+    radial-gradient(circle at 50% 45%, rgba(229, 56, 59, 0.35), transparent 60%),
+    rgba(9, 9, 11, 0.94);
+}
+
+.poll-bye {
+  font-family: var(--poll-serif);
+  font-size: clamp(36px, 5vw, 64px);
+}
+
+.poll-bye-sub {
+  margin: 0;
+  font-size: 16px;
+  color: var(--desk-text-muted);
+}
+
+.poll-count {
+  font-weight: 700;
+  color: var(--desk-text);
+}
+
+@keyframes poll-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes poll-in {
+  from {
+    opacity: 0;
+    transform: scale(1.02);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .poll *,
+  .poll *::before,
+  .poll *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

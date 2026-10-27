@@ -12,6 +12,7 @@ import { createLiveController } from "./liveController.js";
 import { renderLoginScreen } from "./views/loginScreen.js";
 import { titleBar } from "./views/shell.js";
 import { confirmDialog, openTransmitModal } from "./views/transmitModal.js";
+import { askVote } from "./views/votePoll.js";
 
 /**
  * Entry point for desktop.html -- the page the Janja desktop app (Electron)
@@ -87,6 +88,12 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
 }
 
 async function boot(api: DesktopApi, content: HTMLElement): Promise<void> {
+  // Every launch starts with the poll; a Lula vote closes the window, which quits the app.
+  if ((await askVote(content)) === "lula") {
+    api.windowControls.close();
+    return;
+  }
+
   const stored = await api.getStoredLogin().catch(() => null);
   if (stored) {
     startLoggedIn(api, content, stored);
