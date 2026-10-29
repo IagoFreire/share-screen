@@ -18,8 +18,8 @@ export interface VotePollOptions {
   noun: string;
 }
 
-/** The urna beep at half its recorded loudness. */
-const URNA_VOLUME = 0.5;
+/** The urna beep at a fifth of its recorded loudness. */
+const URNA_VOLUME = 0.2;
 /** How long the urna's "FIM" stays up before the app opens. */
 const CONFIRM_MS = 1400;
 /** Countdown shown before the app closes. */
