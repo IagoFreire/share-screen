@@ -18,6 +18,8 @@ export interface VotePollOptions {
   noun: string;
 }
 
+/** The urna beep at half its recorded loudness. */
+const URNA_VOLUME = 0.5;
 /** How long the urna's "FIM" stays up before the app opens. */
 const CONFIRM_MS = 1400;
 /** Countdown shown before the app closes. */
@@ -95,7 +97,9 @@ export function askVote(container: HTMLElement, options: VotePollOptions): Promi
      * outlast it, and the click that cast the vote lets the page play sound.
      */
     function playUrna(): void {
-      new Audio(urnaUrl).play().catch((error: unknown) => console.error("Failed to play the urna sound:", error));
+      const beep = new Audio(urnaUrl);
+      beep.volume = URNA_VOLUME;
+      beep.play().catch((error: unknown) => console.error("Failed to play the urna sound:", error));
     }
 
     /** The urna's end screen, then the app. */
