@@ -13,6 +13,10 @@ import { renderLoginScreen } from "./views/loginScreen.js";
 import { titleBar } from "./views/shell.js";
 import { confirmDialog, openTransmitModal } from "./views/transmitModal.js";
 import { askVote } from "../ui/votePoll.js";
+import { browserVoteMemory } from "../ui/voteMemory.js";
+
+/** Electron keeps localStorage in the app's data folder, so this outlives restarts. */
+const voteMemory = browserVoteMemory();
 
 /**
  * Entry point for desktop.html -- the page the Janja desktop app (Electron)
@@ -76,7 +80,10 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
     },
     isLive: () => live.isLive,
     audience: () => (live.isLive ? audience : null),
-    beforeLogout: () => live.end(),
+    beforeLogout: () => {
+      live.end();
+      voteMemory.forget(login.user.id); // the next login answers the poll again
+    },
   });
 
   live.onChange(() => {
@@ -88,13 +95,18 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
 }
 
 async function boot(api: DesktopApi, content: HTMLElement): Promise<void> {
-  // Every launch starts with the poll; a Lula vote closes the window, which quits the app.
-  if ((await askVote(content, { noun: "a Janja" })) === "lula") {
-    api.windowControls.close();
-    return;
+  const stored = await api.getStoredLogin().catch(() => null);
+
+  // The poll runs until a user gets through once (ui/voteMemory.ts); logging out makes
+  // them answer again. A Lula vote closes the window, which quits the app.
+  if (!stored || !voteMemory.hasPassed(stored.user.id)) {
+    if ((await askVote(content, { noun: "a Janja" })) === "lula") {
+      api.windowControls.close();
+      return;
+    }
+    if (stored) voteMemory.remember(stored.user.id);
   }
 
-  const stored = await api.getStoredLogin().catch(() => null);
   if (stored) {
     startLoggedIn(api, content, stored);
     return;
@@ -102,7 +114,9 @@ async function boot(api: DesktopApi, content: HTMLElement): Promise<void> {
   renderLoginScreen(
     content,
     async () => {
-      startLoggedIn(api, content, await api.login());
+      const login = await api.login();
+      voteMemory.remember(login.user.id); // answered the poll just before logging in
+      startLoggedIn(api, content, login);
     },
     () => void api.cancelLogin(),
   );

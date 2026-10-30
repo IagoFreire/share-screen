@@ -7,6 +7,7 @@ import { RPCCloseCodes } from "@discord/embedded-app-sdk";
 import { bootstrapDiscordSdk, getDiscordSdk } from "./discord/sdkBootstrap.js";
 import { mountApp } from "./ui/App.js";
 import { askVoteFullScreen } from "./ui/votePoll.js";
+import { browserVoteMemory } from "./ui/voteMemory.js";
 
 async function main(): Promise<void> {
   const statusEl = document.querySelector<HTMLParagraphElement>("#status");
@@ -19,11 +20,16 @@ async function main(): Promise<void> {
   try {
     const auth = await bootstrapDiscordSdk();
 
-    // Same poll as the desktop app (ui/votePoll.ts); a Lula vote closes the Activity.
+    // Same poll as the desktop app (ui/votePoll.ts), answered once per Discord account
+    // on this device (ui/voteMemory.ts); a Lula vote closes the Activity.
     setStatus("");
-    if ((await askVoteFullScreen({ noun: "a live" })) === "lula") {
-      getDiscordSdk().close(RPCCloseCodes.CLOSE_NORMAL, "Aqui não, companheiro.");
-      return;
+    const voteMemory = browserVoteMemory();
+    if (!voteMemory.hasPassed(auth.userId)) {
+      if ((await askVoteFullScreen({ noun: "a live" })) === "lula") {
+        getDiscordSdk().close(RPCCloseCodes.CLOSE_NORMAL, "Aqui não, companheiro.");
+        return;
+      }
+      voteMemory.remember(auth.userId);
     }
 
     // Room id is derived from the voice channel the Activity was launched in, so
