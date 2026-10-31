@@ -15,10 +15,13 @@ export interface AudioDecodePipeline {
   decodeChunk: (chunk: AudioChunkInput) => void;
   /** Number of times the jitter buffer ran dry (playback gaps). */
   readonly underruns: number;
-  /** 0 (silent) to 1 (full volume). */
+  /** 0 (silent) to MAX_VOLUME; 1 is the broadcast as sent. */
   setVolume: (volume: number) => void;
   stop: () => void;
 }
+
+/** Viewers may boost a quiet broadcast up to 200%, as with a voice user's volume. */
+export const MAX_VOLUME = 2;
 
 /**
  * Decodes incoming Opus chunks and plays them back via Web Audio, routed through a
@@ -169,7 +172,7 @@ export function startAudioDecodePipeline(params: AudioParams, clock?: MediaClock
       return underruns;
     },
     setVolume: (volume) => {
-      gainNode.gain.value = Math.min(1, Math.max(0, volume));
+      gainNode.gain.value = Math.min(MAX_VOLUME, Math.max(0, volume));
     },
     stop: () => {
       clock?.setSource(null); // video self-clocks again from here

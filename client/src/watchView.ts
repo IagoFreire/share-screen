@@ -8,7 +8,7 @@ import {
 } from "@screenshare-bot/shared";
 import { WsClient } from "./net/wsClient.js";
 import { startVideoDecodePipeline, type VideoDecodePipeline } from "./playback/videoDecodePipeline.js";
-import { startAudioDecodePipeline, type AudioDecodePipeline } from "./playback/audioDecodePipeline.js";
+import { MAX_VOLUME, startAudioDecodePipeline, type AudioDecodePipeline } from "./playback/audioDecodePipeline.js";
 import { createMediaClock } from "./playback/mediaClock.js";
 import {
   ICON_BELL,
@@ -118,7 +118,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
           <button id="video-toggle-btn" class="icon-btn" type="button" title="Desativar vídeo (somente áudio)">${ICON_VIDEO}</button>
           <div class="volume-group">
             <button id="mute-btn" class="icon-btn" type="button" title="Mudo">${ICON_VOLUME}</button>
-            <input id="volume-slider" class="volume-slider" type="range" min="0" max="100" value="100" style="--fill: 100%" />
+            <input id="volume-slider" class="volume-slider" type="range" min="0" max="${MAX_VOLUME * 100}" value="100" title="Volume: 100%" style="--fill: ${100 / MAX_VOLUME}%" />
           </div>
           <button id="fullscreen-btn" class="icon-btn" type="button" title="Tela cheia">${ICON_FULLSCREEN_ENTER}</button>        </div>
       </div>
@@ -314,7 +314,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     const controlsDisabled = isSelf() || isPausedHere || !isWatching();
     muteButton.disabled = controlsDisabled;
     volumeSlider.disabled = controlsDisabled;
-    muteButton.innerHTML = controlsDisabled || Number(volumeSlider.value) === 0 ? ICON_MUTED : ICON_VOLUME;
+    syncMuteButton();
 
     // Unlike audio, video isn't blocked while watching your own broadcast -- see
     // showVideoOffSelfUi above. Only actually being paused (or watching nothing) means
@@ -326,6 +326,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
     videoToggleButton.disabled = isPausedHere || !isWatching();
     videoToggleButton.innerHTML = videoDisabled ? ICON_VIDEO_OFF : ICON_VIDEO;
+    videoToggleButton.classList.toggle("is-off", videoDisabled);
     videoToggleButton.title = videoDisabled ? "Ativar vídeo" : "Desativar vídeo (somente áudio)";
 
     // Only offered while there's a video pipeline to refresh (see jumpToLive).
@@ -715,19 +716,32 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   // --- Volume / mute ---
   volumeSlider.addEventListener("input", () => {
     const volume = Number(volumeSlider.value) / 100;
-    volumeSlider.style.setProperty("--fill", `${volumeSlider.value}%`);
+    syncVolumeFill();
     audioDecodePipeline?.setVolume(volume);
-    muteButton.innerHTML = volume === 0 ? ICON_MUTED : ICON_VOLUME;
+    syncMuteButton();
     if (volume > 0) lastVolumeBeforeMute = volume;
   });
+
+  /** The slider's value is a percentage up to MAX_VOLUME * 100; its fill spans the whole track. */
+  function syncVolumeFill(): void {
+    volumeSlider.style.setProperty("--fill", `${Number(volumeSlider.value) / MAX_VOLUME}%`);
+    volumeSlider.title = `Volume: ${volumeSlider.value}%`;
+  }
+
+  /** Muted icon while there's no sound to hear; flagged "off" only when the user muted it. */
+  function syncMuteButton(): void {
+    const isMuted = Number(volumeSlider.value) === 0;
+    muteButton.innerHTML = muteButton.disabled || isMuted ? ICON_MUTED : ICON_VOLUME;
+    muteButton.classList.toggle("is-off", !muteButton.disabled && isMuted);
+  }
 
   muteButton.addEventListener("click", () => {
     const isMuted = Number(volumeSlider.value) === 0;
     const nextVolume = isMuted ? lastVolumeBeforeMute : 0;
     volumeSlider.value = String(Math.round(nextVolume * 100));
-    volumeSlider.style.setProperty("--fill", `${volumeSlider.value}%`);
+    syncVolumeFill();
     audioDecodePipeline?.setVolume(nextVolume);
-    muteButton.innerHTML = nextVolume === 0 ? ICON_MUTED : ICON_VOLUME;
+    syncMuteButton();
   });
 
   // --- Real fullscreen (this page isn't sandboxed inside Discord's iframe) ---
