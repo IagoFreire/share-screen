@@ -7,11 +7,13 @@ import doorKnockUrl from "../../assets/DoorKnock.mp3";
 import type { DesktopApi, StoredLogin } from "@screenshare-bot/shared";
 import { startDesktopBroadcast, type LiveAudience } from "./broadcast.js";
 import { h } from "./dom.js";
-import { relayWsUrl, startDesktopApp, type DesktopApp } from "./desktopApp.js";
+import { relayWsUrl, startDesktopApp, voiceWsUrl, type DesktopApp } from "./desktopApp.js";
 import { createLiveController } from "./liveController.js";
 import { renderLoginScreen } from "./views/loginScreen.js";
 import { titleBar } from "./views/shell.js";
 import { confirmDialog, openTransmitModal } from "./views/transmitModal.js";
+import { createVoiceUi } from "./views/voiceUi.js";
+import { startVoiceSession } from "../voice/voiceSession.js";
 import { askVote } from "../ui/votePoll.js";
 import { browserVoteMemory } from "../ui/voteMemory.js";
 
@@ -64,6 +66,14 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
       }),
   });
 
+  const voiceRooms = startVoiceSession({
+    url: voiceWsUrl(),
+    session: login.session,
+    name: login.user.globalName ?? login.user.username,
+    avatarUrl: login.user.avatarUrl,
+    onSessionInvalid: () => app?.logOut(),
+  });
+
   app = startDesktopApp(content, api, login, {
     onTransmit: () => {
       if (live.isLive) {
@@ -82,8 +92,10 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
     audience: () => (live.isLive ? audience : null),
     beforeLogout: () => {
       live.end();
+      voiceRooms.close();
       voteMemory.forget(login.user.id); // the next login answers the poll again
     },
+    voiceRooms: createVoiceUi(voiceRooms),
   });
 
   live.onChange(() => {

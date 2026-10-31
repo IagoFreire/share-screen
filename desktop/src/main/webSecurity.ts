@@ -12,7 +12,9 @@ export function buildContentSecurityPolicy(serverOrigin: string): string {
   const socketOrigin = `${url.protocol === "https:" ? "wss:" : "ws:"}//${url.host}`;
   return [
     "default-src 'self'",
-    "script-src 'self'",
+    // WebAssembly compiled from the server's own files: the voice rooms' noise
+    // suppression (RNNoise) runs as WASM. eval() and inline script stay blocked.
+    "script-src 'self' 'wasm-unsafe-eval'",
     // The player and the dev server set inline styles; no inline script is allowed.
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: https://cdn.discordapp.com",
@@ -26,13 +28,17 @@ export function buildContentSecurityPolicy(serverOrigin: string): string {
   ].join("; ");
 }
 
-/** Fullscreen for the player, and screen capture (narrowed further by capture.ts). */
-const ALLOWED_PERMISSIONS = new Set(["fullscreen", "display-capture"]);
+/**
+ * Fullscreen for the player, screen capture (narrowed further by capture.ts), and
+ * picking the speakers voice rooms play through.
+ */
+const ALLOWED_PERMISSIONS = new Set(["fullscreen", "display-capture", "speaker-selection"]);
 
 /**
- * getDisplayMedia() reaches the request handler as "media" with an empty `mediaTypes`;
- * the camera and microphone ask as "media" with "video"/"audio" and stay denied. The
- * display-media handler (capture.ts) still decides which single source is granted.
+ * getDisplayMedia() reaches the request handler as "media" with an empty `mediaTypes`,
+ * and the voice rooms' microphone as "media" with just "audio"; anything asking for
+ * "video" (the camera) stays denied. The display-media handler (capture.ts) still
+ * decides which single screen source is granted.
  */
 export function isAllowedPermission(
   permission: string,
@@ -41,6 +47,6 @@ export function isAllowedPermission(
   mediaTypes?: readonly string[],
 ): boolean {
   if (!isAllowedNavigation(requestingUrl, serverOrigin)) return false;
-  if (permission === "media") return mediaTypes !== undefined && mediaTypes.length === 0;
+  if (permission === "media") return mediaTypes !== undefined && mediaTypes.every((type) => type === "audio");
   return ALLOWED_PERMISSIONS.has(permission);
 }

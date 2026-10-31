@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import { WebSocketServer, type WebSocket, type RawData } from "ws";
 import { handleMessage, handleClose } from "./relay.js";
+import { handleVoiceClose, handleVoiceMessage } from "../voice/voiceServer.js";
 
 /**
  * How often to ping every connection and check the previous round's pongs.
@@ -41,8 +42,12 @@ function attachHeartbeat(wss: WebSocketServer): void {
   wss.on("close", () => clearInterval(interval));
 }
 
-export function attachWebSocketServer(httpServer: Server): WebSocketServer {
-  const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+/** A WebSocket endpoint: binary frames in, and what to do when a connection ends. */
+function createEndpoint(
+  onMessage: (ws: WebSocket, bytes: Uint8Array) => void,
+  onClose: (ws: WebSocket) => void,
+): WebSocketServer {
+  const wss = new WebSocketServer({ noServer: true });
   attachHeartbeat(wss);
 
   wss.on("connection", (ws: WebSocket) => {
@@ -51,15 +56,37 @@ export function attachWebSocketServer(httpServer: Server): WebSocketServer {
 
       try {
         const bytes = data instanceof Buffer ? new Uint8Array(data) : new Uint8Array(data as ArrayBuffer);
-        handleMessage(ws, bytes);
+        onMessage(ws, bytes);
       } catch (error) {
         console.error("Failed to handle WS message:", error);
       }
     });
 
-    ws.on("close", () => handleClose(ws));
+    ws.on("close", () => onClose(ws));
     ws.on("error", (error) => console.error("WS connection error:", error));
   });
 
   return wss;
+}
+
+/**
+ * /ws is the screen-share relay, /voice the voice rooms. ws can't hang two servers with
+ * different `path`s on one HTTP server (the first refuses the other's upgrades), so both
+ * run without one and this routes each upgrade by its path.
+ */
+export function attachWebSocketServer(httpServer: Server): WebSocketServer {
+  const relay = createEndpoint(handleMessage, handleClose);
+  const voice = createEndpoint(handleVoiceMessage, handleVoiceClose);
+
+  httpServer.on("upgrade", (request, socket, head) => {
+    const { pathname } = new URL(request.url ?? "/", "http://localhost");
+    const endpoint = pathname === "/ws" ? relay : pathname === "/voice" ? voice : null;
+    if (!endpoint) {
+      socket.destroy();
+      return;
+    }
+    endpoint.handleUpgrade(request, socket, head, (ws) => endpoint.emit("connection", ws, request));
+  });
+
+  return relay;
 }

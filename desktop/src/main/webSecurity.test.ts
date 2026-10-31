@@ -19,8 +19,8 @@ function directives(policy: string): Map<string, string> {
 describe("buildContentSecurityPolicy", () => {
   const policy = directives(buildContentSecurityPolicy(ORIGIN));
 
-  it("only runs the server's own scripts", () => {
-    expect(policy.get("script-src")).toBe("'self'");
+  it("only runs the server's own scripts, WebAssembly included (noise suppression)", () => {
+    expect(policy.get("script-src")).toBe("'self' 'wasm-unsafe-eval'");
     expect(policy.get("object-src")).toBe("'none'");
     expect(policy.get("base-uri")).toBe("'none'");
   });
@@ -51,9 +51,15 @@ describe("isAllowedPermission", () => {
     expect(isAllowedPermission("display-capture", `${ORIGIN}/desktop.html`, ORIGIN)).toBe(true);
   });
 
-  it("denies the camera, microphone and everything else", () => {
-    expect(isAllowedPermission("media", `${ORIGIN}/desktop.html`, ORIGIN, ["audio"])).toBe(false);
+  it("grants the microphone and the choice of speakers, for voice rooms", () => {
+    expect(isAllowedPermission("media", `${ORIGIN}/desktop.html`, ORIGIN, ["audio"])).toBe(true);
+    expect(isAllowedPermission("speaker-selection", `${ORIGIN}/desktop.html`, ORIGIN)).toBe(true);
+  });
+
+  it("denies the camera, microphone elsewhere, and everything else", () => {
+    expect(isAllowedPermission("media", "https://evil.example/", ORIGIN, ["audio"])).toBe(false);
     expect(isAllowedPermission("media", `${ORIGIN}/desktop.html`, ORIGIN, ["video"])).toBe(false);
+    expect(isAllowedPermission("media", `${ORIGIN}/desktop.html`, ORIGIN, ["audio", "video"])).toBe(false);
     expect(isAllowedPermission("media", `${ORIGIN}/desktop.html`, ORIGIN)).toBe(false);
     expect(isAllowedPermission("geolocation", `${ORIGIN}/desktop.html`, ORIGIN)).toBe(false);
     expect(isAllowedPermission("notifications", `${ORIGIN}/desktop.html`, ORIGIN)).toBe(false);

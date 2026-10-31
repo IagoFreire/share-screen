@@ -69,6 +69,10 @@ export default defineConfig({
         target: "ws://localhost:3001",
         ws: true,
       },
+      "/voice": {
+        target: "ws://localhost:3001",
+        ws: true,
+      },
     },
   },
   build: {

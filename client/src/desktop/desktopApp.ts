@@ -5,6 +5,7 @@ import { h } from "./dom.js";
 import { buildSidebarModel, type SidebarChannel } from "./sidebarModel.js";
 import { createVoicePoller, VOICE_POLL_INTERVAL_MS, type VoiceState } from "./voicePoller.js";
 import { emptyState, renderChannels, renderMainHeader, renderRail, renderUserPanel } from "./views/shell.js";
+import type { VoiceUi } from "./views/voiceUi.js";
 
 /**
  * The logged-in desktop window: voice-channel tracking, the sidebar, and the embedded
@@ -30,6 +31,8 @@ export interface DesktopAppHooks {
   audience: () => LiveAudience | null;
   /** Runs before logging out (which reloads the page), so a live broadcast ends cleanly. */
   beforeLogout: () => void;
+  /** The voice rooms' sidebar section and dock (views/voiceUi.ts); the app only places them. */
+  voiceRooms: Pick<VoiceUi, "roomsSection" | "dock">;
 }
 
 export interface DesktopApp {
@@ -37,12 +40,22 @@ export interface DesktopApp {
   /** Re-renders the user panel after the live state changed. */
   refreshUserPanel(): void;
   onVoiceChange(listener: (voice: VoiceState) => void): void;
+  logOut(): void;
 }
 
 /** The relay's WebSocket on the same origin desktop.html was served from. */
 export function relayWsUrl(): string {
+  return sameOriginWsUrl("/ws");
+}
+
+/** The voice rooms' WebSocket (server/src/voice), next to the relay's. */
+export function voiceWsUrl(): string {
+  return sameOriginWsUrl("/voice");
+}
+
+function sameOriginWsUrl(path: string): string {
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  return `${protocol}://${window.location.host}/ws`;
+  return `${protocol}://${window.location.host}${path}`;
 }
 
 export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: StoredLogin, hooks: DesktopAppHooks): DesktopApp {
@@ -54,7 +67,7 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
 
   const rail = h("nav", { class: "desk-rail", "aria-label": "Servidores" });
   const sidebarHead = h("div", { class: "desk-sidebar-head" });
-  const channelList = h("div", { class: "desk-channels" });
+  const channelList = h("div");
   const userPanel = h("section", { class: "desk-userpanel", "aria-label": "Sua conta" });
   const mainHead = h("header", { class: "desk-main-head" });
   const playerHost = h("div", { class: "desk-player" });
@@ -65,7 +78,16 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
       "div",
       { class: "desk-body" },
       rail,
-      h("aside", { class: "desk-sidebar" }, sidebarHead, channelList, userPanel),
+      h(
+        "aside",
+        { class: "desk-sidebar" },
+        sidebarHead,
+        // The voice rooms scroll with the channels but sit outside what renderChannels
+        // redraws, so a room name being typed survives the broadcast refreshes.
+        h("div", { class: "desk-channels" }, channelList, hooks.voiceRooms.roomsSection),
+        hooks.voiceRooms.dock,
+        userPanel,
+      ),
       h("main", { class: "desk-main" }, mainHead, h("div", { class: "desk-stage" }, playerHost, overlay)),
     ),
   );
@@ -199,5 +221,6 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
     voice: () => state.voice,
     refreshUserPanel: render,
     onVoiceChange: (listener) => voiceListeners.push(listener),
+    logOut: () => void logOut(),
   };
 }

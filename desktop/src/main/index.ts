@@ -98,9 +98,12 @@ function installWebSecurity(): void {
     const mediaTypes = "mediaTypes" in details ? details.mediaTypes : undefined;
     callback(isAllowedPermission(permission, details.requestingUrl, serverOrigin, mediaTypes));
   });
-  session.defaultSession.setPermissionCheckHandler((_contents, permission, requestingOrigin) =>
-    isAllowedPermission(permission, requestingOrigin, serverOrigin),
-  );
+  // The microphone's check carries its media type; without it the page's device list
+  // (voice rooms) would come back unnamed.
+  session.defaultSession.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
+    const mediaType = "mediaType" in details ? details.mediaType : undefined;
+    return isAllowedPermission(permission, requestingOrigin, serverOrigin, mediaType ? [mediaType] : undefined);
+  });
 }
 
 function showOfflinePage(window: BrowserWindow): void {
