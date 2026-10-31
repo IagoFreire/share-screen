@@ -315,9 +315,9 @@ body.desktop .vc-picker-option:focus-visible {
   margin-top: 0;
 }
 
+/* Full width, so "Testar microfone" turning into "Parar teste" moves nothing. */
 .vc-test {
-  align-self: flex-start;
-  padding: 7px 14px;
+  padding: 8px 14px;
   border: 0;
   border-radius: 4px;
   background: var(--desk-blurple);

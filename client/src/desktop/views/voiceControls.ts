@@ -22,7 +22,14 @@ export function devicePicker(options: DevicePickerOptions): HTMLElement {
   const selected = options.devices.find((device) => device.deviceId === options.selectedId);
   const button = h(
     "button",
-    { class: "vc-picker-btn", type: "button", "aria-haspopup": "listbox", "aria-expanded": "false", "aria-label": options.label },
+    {
+      class: "vc-picker-btn",
+      type: "button",
+      "aria-haspopup": "listbox",
+      "aria-expanded": "false",
+      "aria-label": options.label,
+      "data-focus-key": options.label,
+    },
     h("span", { class: "vc-picker-value" }, selected?.label ?? "Procurando dispositivos…"),
     icon(CHEVRON, "vc-picker-chevron"),
   );
@@ -93,7 +100,15 @@ export interface VolumeSliderOptions {
 /** 0-200% in whole percents, filled up to the thumb; the 100% notch is the unchanged level. */
 export function volumeSlider(options: VolumeSliderOptions): HTMLElement {
   const readout = h("span", { class: "vc-field-value" });
-  const input = h("input", { class: "vc-range", type: "range", min: "0", max: "200", step: "1", "aria-label": options.label });
+  const input = h("input", {
+    class: "vc-range",
+    type: "range",
+    min: "0",
+    max: "200",
+    step: "1",
+    "aria-label": options.label,
+    "data-focus-key": options.label,
+  });
   input.value = String(Math.round(options.value * 100));
 
   function paint(): void {
@@ -125,6 +140,7 @@ export function toggleSwitch(label: string, on: boolean, onToggle: (on: boolean)
       role: "switch",
       "aria-checked": on ? "true" : "false",
       "aria-label": label,
+      "data-focus-key": label,
       onClick: () => onToggle(!on),
     },
     h("span", { class: "vc-switch-knob" }),

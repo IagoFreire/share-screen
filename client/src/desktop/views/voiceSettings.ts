@@ -5,23 +5,25 @@ import type { VoiceSession } from "../../voice/voiceSession.js";
 import { devicePicker, toggleSwitch, volumeSlider } from "./voiceControls.js";
 
 /**
- * The panel the dock's chevrons open, Discord's voice settings in small: for the
- * microphone its device, volume, sensitivity bar, RNNoise and a test; for the output
- * its device and a test sound.
+ * What the dock's chevrons open, Discord's voice settings in small: for the microphone
+ * its device, volume, sensitivity bar, RNNoise and a test; for the output its device and
+ * a test sound. voiceUi.ts owns the panel itself and swaps this content in, so a refresh
+ * never replays the panel's opening or changes its size: every text here keeps its
+ * length whatever the state, and focus comes back to the control marked data-focus-key.
  */
 
-/** What the panel is drawn from. voiceUi.ts rebuilds it only when this changes, so never mid-drag. */
+/** What the content is drawn from. voiceUi.ts redraws it only when this changes, so never mid-drag. */
 export function devicePanelKey(kind: DeviceKind, devices: readonly AudioDevice[], session: VoiceSession): string {
   const state = session.state();
-  return JSON.stringify([kind, devices, savedDevice(kind), state.noiseSuppression, state.micTest, state.outputTest, state.roomId === null]);
+  return JSON.stringify([kind, devices, savedDevice(kind), state.noiseSuppression, state.micTest !== "off", state.outputTest]);
 }
 
-export function devicePanel(kind: DeviceKind, devices: readonly AudioDevice[], session: VoiceSession): HTMLElement {
-  return h(
-    "div",
-    { class: "vc-popover", role: "dialog", "aria-label": kind === "input" ? "Configurações do microfone" : "Configurações de saída" },
-    ...(kind === "input" ? inputSettings(devices, session) : outputSettings(devices, session)),
-  );
+export function devicePanelLabel(kind: DeviceKind): string {
+  return kind === "input" ? "Configurações do microfone" : "Configurações de saída";
+}
+
+export function devicePanelContent(kind: DeviceKind, devices: readonly AudioDevice[], session: VoiceSession): HTMLElement[] {
+  return kind === "input" ? inputSettings(devices, session) : outputSettings(devices, session);
 }
 
 function pickerField(kind: DeviceKind, devices: readonly AudioDevice[], session: VoiceSession): HTMLElement {
@@ -44,7 +46,6 @@ function pickerField(kind: DeviceKind, devices: readonly AudioDevice[], session:
  * and green past it; dragging the mark sets what's quiet enough not to be sent.
  */
 function sensitivityField(session: VoiceSession): HTMLElement {
-  const state = session.state();
   const readout = h("span", { class: "vc-field-value" });
   const range = h("input", {
     class: "vc-sense-range",
@@ -53,8 +54,9 @@ function sensitivityField(session: VoiceSession): HTMLElement {
     max: "0",
     step: "1",
     "aria-label": "Sensibilidade do microfone",
+    "data-focus-key": "sensitivity",
   });
-  range.value = String(state.sensitivityDb);
+  range.value = String(session.state().sensitivityDb);
   // voiceUi.ts paints the microphone's level on it every frame (data-input-level).
   const bar = h("div", { class: "vc-sense", "data-input-level": "" }, h("span", { class: "vc-sense-fill" }), range);
 
@@ -70,18 +72,27 @@ function sensitivityField(session: VoiceSession): HTMLElement {
     paint();
     session.setSensitivity(Number(range.value));
   });
-  const idle = state.roomId === null && state.micTest === "off";
   return h(
     "div",
     { class: "vc-field" },
     h("div", { class: "vc-field-head" }, h("span", { class: "vc-pop-label" }, "Sensibilidade"), readout),
     bar,
-    h("small", { class: "vc-hint" }, idle ? "Teste o microfone para ver o seu nível na barra." : "Abaixo da marca, você não transmite."),
+    h("small", { class: "vc-hint" }, "Abaixo da marca, você não transmite."),
+  );
+}
+
+/** Not disabled while busy: a disabled button drops the keyboard's focus. */
+function testButton(focusKey: string, label: string, active: boolean, onClick: () => void): HTMLElement {
+  return h(
+    "button",
+    { class: `vc-test${active ? " is-on" : ""}`, type: "button", "data-focus-key": focusKey, onClick },
+    label,
   );
 }
 
 function inputSettings(devices: readonly AudioDevice[], session: VoiceSession): HTMLElement[] {
   const state = session.state();
+  // Straight from one to the other: the moment the microphone takes to open isn't worth a label.
   const testing = state.micTest !== "off";
   return [
     pickerField("input", devices, session),
@@ -96,17 +107,8 @@ function inputSettings(devices: readonly AudioDevice[], session: VoiceSession): 
     h(
       "div",
       { class: "vc-test-row" },
-      h(
-        "button",
-        {
-          class: `vc-test${testing ? " is-on" : ""}`,
-          type: "button",
-          disabled: state.micTest === "starting",
-          onClick: () => session.toggleMicTest(),
-        },
-        state.micTest === "on" ? "Parar teste" : state.micTest === "starting" ? "Abrindo o microfone…" : "Testar microfone",
-      ),
-      h("small", { class: "vc-hint" }, testing ? "Você está se ouvindo como os outros te ouvem." : "Fale e escute como você chega para os outros."),
+      testButton("mic-test", testing ? "Parar teste" : "Testar microfone", testing, () => session.toggleMicTest()),
+      h("small", { class: "vc-hint" }, "Você se ouve como os outros te ouvem."),
     ),
   ];
 }
@@ -118,11 +120,7 @@ function outputSettings(devices: readonly AudioDevice[], session: VoiceSession):
     h(
       "div",
       { class: "vc-test-row" },
-      h(
-        "button",
-        { class: "vc-test", type: "button", disabled: state.outputTest, onClick: () => session.testOutput() },
-        state.outputTest ? "Tocando…" : "Testar saída",
-      ),
+      testButton("output-test", state.outputTest ? "Tocando…" : "Testar saída", false, () => session.testOutput()),
       h("small", { class: "vc-hint" }, "Toca um som curto no dispositivo escolhido."),
     ),
   ];

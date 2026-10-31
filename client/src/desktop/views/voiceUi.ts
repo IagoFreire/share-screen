@@ -5,7 +5,7 @@ import { avatar, h, icon } from "../dom.js";
 import { listAudioDevices, type AudioDevice, type DeviceKind } from "../../voice/voiceDevices.js";
 import { SPEAKING_LEVEL } from "../../voice/voiceLevel.js";
 import type { VoiceSession } from "../../voice/voiceSession.js";
-import { devicePanel, devicePanelKey } from "./voiceSettings.js";
+import { devicePanelContent, devicePanelKey, devicePanelLabel } from "./voiceSettings.js";
 import { openUserVolumeMenu } from "./voiceUserMenu.js";
 
 /**
@@ -52,6 +52,8 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
   let frame = 0;
   /** Closes the open "Volume do usuário" menu, if any. */
   let closeUserMenu: (() => void) | null = null;
+  /** The open device panel's box; see redrawPanel. */
+  let panelBox: HTMLElement | null = null;
 
   // The name field and the device panel outlive the redraws around them: someone joining
   // a room elsewhere must not steal the focus or close a device list mid-pick.
@@ -209,6 +211,28 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
     );
   }
 
+  /**
+   * The open panel's box is made once per opening, so its rise animation plays once;
+   * later redraws (a test starting, devices listed) only swap what's inside it and hand
+   * the focus back to the same control.
+   */
+  function redrawPanel(): void {
+    if (popover === null) {
+      panelBox = null;
+      fill(panelSlot, null);
+      return;
+    }
+    if (panelBox?.dataset.kind !== popover) {
+      panelBox = h("div", { class: "vc-popover", role: "dialog", "aria-label": devicePanelLabel(popover), "data-kind": popover });
+      fill(panelSlot, panelBox);
+    }
+    const focused = panelBox.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.focusKey : undefined;
+    panelBox.replaceChildren(...devicePanelContent(popover, devices[popover], session));
+    if (focused) {
+      [...panelBox.querySelectorAll<HTMLElement>("[data-focus-key]")].find((element) => element.dataset.focusKey === focused)?.focus();
+    }
+  }
+
   function renderDock(): void {
     const state = session.state();
     const room = state.rooms.find((candidate) => candidate.id === state.roomId);
@@ -216,7 +240,7 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
     const panel = popover === null ? "" : devicePanelKey(popover, devices[popover], session);
     if (panel !== shownPanel) {
       shownPanel = panel;
-      fill(panelSlot, popover ? devicePanel(popover, devices[popover], session) : null);
+      redrawPanel();
     }
     fill(
       dockBody,

@@ -82,10 +82,18 @@ export async function openMicInput(options: MicInputOptions): Promise<MicInput> 
 
   try {
     const source = context.createMediaStreamSource(stream);
-    const rnnoise = options.noiseSuppression ? await addRnnoise(context, source) : null;
+    // Microphones often arrive as two channels, and RNNoise cleans only the first while
+    // passing a silent second one on: the test played in the left ear only, and the room
+    // heard the mixdown 6 dB down. One channel from here on; outputs play it in both ears.
+    const mono = context.createGain();
+    mono.channelCount = 1;
+    mono.channelCountMode = "explicit";
+    mono.channelInterpretation = "speakers";
+    source.connect(mono);
+    const rnnoise = options.noiseSuppression ? await addRnnoise(context, mono) : null;
     const gain = context.createGain();
     gain.gain.value = options.gain;
-    (rnnoise ?? source).connect(gain);
+    (rnnoise ?? mono).connect(gain);
     const analyser = context.createAnalyser();
     analyser.fftSize = 512;
     gain.connect(analyser);
