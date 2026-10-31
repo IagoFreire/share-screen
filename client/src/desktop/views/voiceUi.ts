@@ -150,9 +150,7 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
     fill(
       roomList,
       ...rooms.map((room) => roomCard(room, room.id === state.roomId)),
-      rooms.length === 0 && !creating
-        ? h("p", { class: "vc-empty" }, state.connected ? "Nenhuma sala aberta. Crie uma no +." : "Conectando à voz…")
-        : null,
+      state.connected ? null : h("p", { class: "vc-empty" }, "Conectando à voz…"),
       state.error ? h("p", { class: "vc-error", role: "alert" }, state.error) : null,
     );
   }
