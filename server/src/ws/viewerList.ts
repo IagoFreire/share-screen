@@ -43,3 +43,12 @@ export function listRoomPeople(connections: Iterable<ViewerConnection>): RoomPer
 
   return people;
 }
+
+/**
+ * The room's "espectadores": its people, each once however many connections they hold,
+ * minus whoever is broadcasting -- someone live isn't part of their own audience.
+ */
+export function countSpectators(connections: Iterable<ViewerConnection>, presenterIds: Iterable<string | null>): number {
+  const presenters = new Set(presenterIds);
+  return listRoomPeople(connections).filter((person) => person.userId === null || !presenters.has(person.userId)).length;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listRoomPeople, type ViewerConnection } from "./viewerList.js";
+import { countSpectators, listRoomPeople, type ViewerConnection } from "./viewerList.js";
 
 function connection(overrides: Partial<ViewerConnection> = {}): ViewerConnection {
   return { userId: "7", selectedSlot: 0, isPaused: false, ...overrides };
@@ -44,5 +44,21 @@ describe("listRoomPeople", () => {
       { userId: null, slot: 0 },
       { userId: null, slot: null },
     ]);
+  });
+});
+
+describe("countSpectators", () => {
+  it("does not count whoever is broadcasting", () => {
+    const connections = [connection({ userId: "9", selectedSlot: null }), connection({ userId: "1" })];
+
+    expect(countSpectators(connections, ["9"])).toBe(1);
+  });
+
+  it("counts a person with several connections once", () => {
+    expect(countSpectators([connection({ userId: "1" }), connection({ userId: "1" })], [])).toBe(1);
+  });
+
+  it("counts anonymous connections each", () => {
+    expect(countSpectators([connection({ userId: null }), connection({ userId: null })], ["9"])).toBe(2);
   });
 });

@@ -18,7 +18,7 @@ import { verifySessionToken } from "../auth/session.js";
 import { pausesSiblingConnections, resolveJoinIdentity, startsWatchingNothing } from "./joinIdentity.js";
 import { createAutoLayer, type AutoLayer } from "./autoLayer.js";
 import { countAudience } from "./audience.js";
-import { listRoomPeople } from "./viewerList.js";
+import { countSpectators, listRoomPeople } from "./viewerList.js";
 
 /** The frame header carries the layer in 2 bits. */
 const MAX_LAYERS = 4;
@@ -121,7 +121,7 @@ async function sendActiveBroadcasts(ws: WebSocket, onlyRoomId: string | null): P
         slot: stream.slot,
         presenterId: stream.presenterId,
         presenterName,
-        viewerCount: room.viewerCount,
+        viewerCount: spectatorCount(room),
       };
     }),
   );
@@ -131,11 +131,8 @@ async function sendActiveBroadcasts(ws: WebSocket, onlyRoomId: string | null): P
 
 /** Sends who is in `room` (the viewer list), names looked up like the broadcast list's. */
 async function sendViewers(ws: WebSocket, room: Room): Promise<void> {
-  const connections: ConnectionState[] = [];
-  room.forEachViewer((viewer) => connections.push(getState(viewer)));
-
   const viewers = await Promise.all(
-    listRoomPeople(connections).map(async (person) => ({ ...person, name: await resolveUserName(person.userId) })),
+    listRoomPeople(viewerStates(room)).map(async (person) => ({ ...person, name: await resolveUserName(person.userId) })),
   );
   send(ws, { kind: "viewers", viewers });
 }
@@ -160,6 +157,26 @@ function broadcastControl(room: Room, message: ControlMessage): void {
 /** Tells everyone the set of live broadcasts changed, so viewers can update their picker. */
 function broadcastStreams(room: Room): void {
   broadcastControl(room, { kind: "streams-changed", streams: room.streams });
+  // Someone going live or stopping moves them out of or back into the audience.
+  announceViewerCount(room);
+}
+
+function viewerStates(room: Room): ConnectionState[] {
+  const states: ConnectionState[] = [];
+  room.forEachViewer((viewer) => states.push(getState(viewer)));
+  return states;
+}
+
+/** The "N espectador(es)" every viewer UI shows: people, not connections, and not whoever is live. */
+function spectatorCount(room: Room): number {
+  return countSpectators(
+    viewerStates(room),
+    room.streams.map((stream) => stream.presenterId),
+  );
+}
+
+function announceViewerCount(room: Room): void {
+  broadcastControl(room, { kind: "viewer-count", count: spectatorCount(room) });
 }
 
 /**
@@ -368,7 +385,7 @@ async function handleJoin(
     const previous = roomManager.getRoom(state.roomId);
     if (previous) {
       previous.removeViewer(ws);
-      broadcastControl(previous, { kind: "viewer-count", count: previous.viewerCount });
+      announceViewerCount(previous);
       // Same as a disconnect (see handleClose): a sibling tab this connection had
       // paused in the old room now has nothing showing it the stream.
       if (state.userId) resumeConnectionForUser(previous, state.userId);
@@ -403,10 +420,12 @@ async function handleJoin(
     kind: "joined",
     roomId: message.roomId,
     streams: room.streams,
-    viewerCount: room.viewerCount,
+    viewerCount: spectatorCount(room),
     isAdmin: isAdmin(userId),
   });
   if (pausedChanged) broadcastStreams(room);
+  // Everyone already in the room hears about the newcomer too, not just on leaving.
+  else announceViewerCount(room);
 }
 
 function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
@@ -612,7 +631,7 @@ export function handleClose(ws: WebSocket): void {
       handleSlotWentAway(room, freed);
     } else {
       room.removeViewer(ws);
-      broadcastControl(room, { kind: "viewer-count", count: room.viewerCount });
+      announceViewerCount(room);
     }
 
     // If this connection had paused a sibling tab of the same user, that tab has
