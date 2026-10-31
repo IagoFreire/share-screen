@@ -12,6 +12,7 @@ import { createLiveController } from "./liveController.js";
 import { renderLoginScreen } from "./views/loginScreen.js";
 import { titleBar } from "./views/shell.js";
 import { confirmDialog, openTransmitModal } from "./views/transmitModal.js";
+import { createUpdateControl } from "./views/updateControl.js";
 import { createVoiceUi } from "./views/voiceUi.js";
 import { startVoiceSession } from "../voice/voiceSession.js";
 import { askVote } from "../ui/votePoll.js";
@@ -141,7 +142,8 @@ function main(): void {
 
   const api = window.desktop ?? null;
   const content = h("div", { class: "desk-content" });
-  root.replaceChildren(titleBar(api?.windowControls ?? null), content);
+  // Apps from before 0.6.0 have no update bridge; they update themselves at launch.
+  root.replaceChildren(titleBar(api?.windowControls ?? null, api?.updates ? createUpdateControl(api.updates) : null), content);
 
   if (!api) {
     content.replaceChildren(h("p", { class: "desk-outside" }, "Abra esta página pelo app Janja."));

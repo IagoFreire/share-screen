@@ -25,6 +25,7 @@ import { buildContentSecurityPolicy, isAllowedPermission } from "./webSecurity";
 import { createSourceSelection, isSourceId, pickDisplayMedia, THUMBNAIL_SIZE, toDesktopSource } from "./capture";
 import { isAllowedNavigation } from "./navigation";
 import { resolveServerOrigin } from "./serverOrigin";
+import { createUpdateTracker } from "./updates";
 import { mainWindowWebPreferences } from "./windowOptions";
 
 /**
@@ -53,6 +54,9 @@ let isQuitting = false;
 
 /** Picked in desktop.html's own picker; granted on the page's next getDisplayMedia(). */
 const sourceSelection = createSourceSelection();
+
+/** Followed for the title bar's update button (see updates.ts). */
+const updates = createUpdateTracker((status) => mainWindow?.webContents.send("desktop:update-status", status));
 
 /** Only the server's own pages may drive the IPC bridge (see navigation.ts). */
 function isTrustedSender(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
@@ -196,9 +200,19 @@ function showMainWindow(): void {
 
 /** Quitting while live first asks the page to end the broadcast, so viewers see it stop. */
 function quitApp(): void {
+  endLiveThen(() => app.quit());
+}
+
+/** Restarts into the downloaded update, ending a live first like quitApp. */
+function installUpdate(): void {
+  // Silent: the installer is one-click anyway; then the new version opens by itself.
+  endLiveThen(() => autoUpdater.quitAndInstall(true, true));
+}
+
+function endLiveThen(quit: () => void): void {
   const finish = () => {
     isQuitting = true;
-    app.quit();
+    quit();
   };
   if (!isLive) {
     finish();
@@ -208,10 +222,39 @@ function quitApp(): void {
   setTimeout(finish, QUIT_GRACE_MS);
 }
 
+/** Feeds every updater event -- the startup check's too -- into the update tracker. */
+function followUpdates(): void {
+  autoUpdater.on("checking-for-update", () => updates.checking());
+  autoUpdater.on("update-available", (info) => updates.available(info.version));
+  autoUpdater.on("download-progress", (progress) => updates.progress(progress.percent));
+  autoUpdater.on("update-downloaded", (info) => updates.downloaded(info.version));
+  autoUpdater.on("update-not-available", () => updates.notAvailable());
+  autoUpdater.on("error", (error) => {
+    console.error("Updater error:", error);
+    updates.failed();
+  });
+}
+
 function registerIpc(): void {
   ipcMain.on("desktop:set-live", (event, live: unknown) => {
     if (!isTrustedSender(event)) return;
     setLiveState(live === true);
+  });
+
+  ipcMain.handle("desktop:update-state", (event) => {
+    assertTrustedSender(event);
+    return { version: app.getVersion(), status: app.isPackaged ? updates.status() : { state: "unsupported" } };
+  });
+
+  ipcMain.handle("desktop:update-check", async (event) => {
+    assertTrustedSender(event);
+    if (!app.isPackaged || updates.isBusy()) return;
+    // A failure also arrives as the updater's "error" event, which the tracker explains.
+    await autoUpdater.checkForUpdates().catch((error: unknown) => console.error("Update check failed:", error));
+  });
+
+  ipcMain.on("desktop:update-install", (event) => {
+    if (isTrustedSender(event) && updates.status().state === "ready") installUpdate();
   });
 
   ipcMain.handle("desktop:audio-apps", async (event) => {
@@ -384,6 +427,7 @@ if (!app.requestSingleInstanceLock()) {
     // Installed copies update themselves from the GitHub Releases (see package.json
     // "publish"); a dev run has no release feed to compare against.
     if (app.isPackaged) {
+      followUpdates();
       autoUpdater.checkForUpdatesAndNotify().catch((error: unknown) => console.error("Update check failed:", error));
     }
     mainWindow = createMainWindow();

@@ -25,7 +25,8 @@ export const ICONS = {
   close: `<svg viewBox="0 0 12 12"><path d="M1.5 1.5l9 9m0-9-9 9" stroke="currentColor" stroke-width="1.1"/></svg>`,
 } as const;
 
-export function titleBar(controls: DesktopApi["windowControls"] | null): HTMLElement {
+/** `extra` sits just before the window buttons (the update button, in the app). */
+export function titleBar(controls: DesktopApi["windowControls"] | null, extra: HTMLElement | null = null): HTMLElement {
   const button = (label: string, svg: string, onClick: () => void, extraClass = "") =>
     h("button", { class: `desk-winbtn ${extraClass}`, type: "button", "aria-label": label, title: label, onClick }, icon(svg));
 
@@ -38,6 +39,7 @@ export function titleBar(controls: DesktopApi["windowControls"] | null): HTMLEle
       h(
         "div",
         { class: "desk-winbtns" },
+        extra,
         button("Minimizar", ICONS.minimize, () => controls.minimize()),
         button("Maximizar", ICONS.maximize, () => controls.toggleMaximize()),
         button("Fechar", ICONS.close, () => controls.close(), "is-close"),

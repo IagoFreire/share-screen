@@ -36,6 +36,27 @@ export interface DesktopAppAudio {
   onEnded(listener: () => void): void;
 }
 
+/** Where the app's own update stands (electron-updater, from the GitHub Releases). */
+export type UpdateStatus =
+  | { state: "idle" }
+  | { state: "checking" }
+  | { state: "up-to-date" }
+  | { state: "downloading"; version: string; percent: number }
+  | { state: "ready"; version: string }
+  /** A dev run has no release feed to update from. */
+  | { state: "unsupported" }
+  | { state: "error"; message: string };
+
+export interface DesktopUpdates {
+  /** The installed version, and the update's state right now. */
+  getState(): Promise<{ version: string; status: UpdateStatus }>;
+  /** Looks for a newer release; one found downloads by itself. Progress comes through onStatus. */
+  check(): Promise<void>;
+  /** Restarts into the downloaded update (ending a live first). */
+  install(): void;
+  onStatus(listener: (status: UpdateStatus) => void): void;
+}
+
 /** What the app remembers between launches after "Entrar com Discord". */
 export interface StoredLogin {
   session: string;
@@ -59,6 +80,8 @@ export interface DesktopApi {
   /** The tray's "Encerrar transmissão" was clicked. */
   onEndLiveRequested(listener: () => void): void;
   appAudio: DesktopAppAudio;
+  /** Missing before 0.6.0, whose preload predates it. */
+  updates?: DesktopUpdates;
   windowControls: {
     minimize(): void;
     toggleMaximize(): void;
