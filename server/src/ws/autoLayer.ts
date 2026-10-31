@@ -14,11 +14,24 @@ const DOWN_WINDOW_MS = 2000;
 const DOWN_DROP_THRESHOLD = 5;
 /** A clean stretch this long earns one step back up. */
 const UP_QUIET_MS = 15_000;
+/**
+ * After stepping down on a viewer's report, ignore further reports this long: what is
+ * already queued for the old layer still arrives late, and judging the new layer by it
+ * would skip straight past it.
+ */
+const CONGESTION_COOLDOWN_MS = 3000;
 
 export interface AutoLayer {
   readonly layer: number;
   /** Feed every video send result; returns the new layer when it changes, else null. */
   report(result: SendResult, nowMs: number): number | null;
+  /**
+   * The viewer says frames arrive later and later (see report-congestion). Behind a
+   * proxy that buffers on the relay's behalf, the send results above stay "sent" long
+   * after the link fell behind, so this is often the only sign. Returns the new layer
+   * when it changes, else null.
+   */
+  congested(nowMs: number): number | null;
 }
 
 export function createAutoLayer(layerCount: number, nowMs: number): AutoLayer {
@@ -27,9 +40,19 @@ export function createAutoLayer(layerCount: number, nowMs: number): AutoLayer {
   let recentDrops: number[] = [];
   /** Start of the current clean stretch: the last drop or the last change. */
   let quietSince = nowMs;
+  let lastCongestionStepAt = -Infinity;
 
   return {
     get layer() {
+      return layer;
+    },
+
+    congested(now) {
+      quietSince = now;
+      if (layer >= lightest || now - lastCongestionStepAt < CONGESTION_COOLDOWN_MS) return null;
+      layer += 1;
+      lastCongestionStepAt = now;
+      recentDrops = [];
       return layer;
     },
 

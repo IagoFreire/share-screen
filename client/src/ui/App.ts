@@ -11,6 +11,8 @@ import { WsClient } from "../net/wsClient.js";
 import { startVideoDecodePipeline, type VideoDecodePipeline } from "../playback/videoDecodePipeline.js";
 import { startAudioDecodePipeline, type AudioDecodePipeline } from "../playback/audioDecodePipeline.js";
 import { createMediaClock } from "../playback/mediaClock.js";
+import { createStreamReceiver } from "../playback/streamReceiver.js";
+import { createStatsOverlay, isStatsShortcut } from "./statsOverlay.js";
 import { getDiscordSdk } from "../discord/sdkBootstrap.js";
 import {
   ICON_BELL,
@@ -148,6 +150,18 @@ export function mountApp(options: MountAppOptions): void {
   // than its own -- see playback/mediaClock.ts. Outlives both, since they're torn down
   // and rebuilt independently (pause/resume, audio-only toggle, audio param changes).
   const mediaClock = createMediaClock();
+  // Routes every media frame to the pipelines (see playback/streamReceiver.ts).
+  const receiver = createStreamReceiver({
+    requestKeyframe: () => wsClient.sendControl({ kind: "request-keyframe" }),
+    reportCongestion: () => wsClient.sendControl({ kind: "report-congestion" }),
+  });
+  const statsOverlay = createStatsOverlay(player, () => ({
+    audio: audioDecodePipeline?.stats() ?? null,
+    video: videoDecodePipeline?.stats() ?? null,
+    receiver: receiver.stats(),
+    layer: currentStream()?.layers ? currentLayer : null,
+    autoLayer: layerChoice === "auto",
+  }));
 
   let videoDecodePipeline: VideoDecodePipeline | null = null;
   let audioDecodePipeline: AudioDecodePipeline | null = null;
@@ -344,9 +358,9 @@ export function mountApp(options: MountAppOptions): void {
     clearCanvas();
     render();
 
+    // No keyframe request of our own: the relay asks the presenter for one on select-stream.
     await ensureVideoPipeline();
     ensureAudioPipeline(audioParamsForSelection());
-    wsClient.sendControl({ kind: "request-keyframe" });
   }
 
   const wsClient = new WsClient(wsUrl, {
@@ -422,6 +436,7 @@ export function mountApp(options: MountAppOptions): void {
 
       case "streams-changed": {
         streams = message.streams;
+        const previousSlot = selectedSlot;
         // The stream being watched may have just ended. The server already moved this
         // connection to a surviving slot (see handleSlotWentAway), so follow it rather
         // than sitting on a slot that no longer exists and receiving nothing.
@@ -434,7 +449,10 @@ export function mountApp(options: MountAppOptions): void {
         if (!isPausedHere) {
           ensureAudioPipeline(lastAudioParams);
           if (hasPresenter()) {
-            wsClient.sendControl({ kind: "request-keyframe" });
+            // Only a moved viewer needs a fresh picture. Every viewer asking on every
+            // list change made the presenter spend keyframes (5-15x a normal frame) for
+            // decoders that were fine.
+            if (selectedSlot !== previousSlot) wsClient.sendControl({ kind: "request-keyframe" });
           } else {
             // Everything ended: drop the last decoded frame so the idle screen isn't
             // layered over a frozen still of whatever was on screen when it stopped.
@@ -479,15 +497,7 @@ export function mountApp(options: MountAppOptions): void {
   }
 
   function handleFrame(frame: EncodedFrame): void {
-    if (frame.type === FrameType.Video && videoDecodePipeline) {
-      videoDecodePipeline.decodeChunk({
-        keyFrame: frame.keyFrame ?? false,
-        timestampUs: frame.timestamp * 1000,
-        data: frame.payload,
-      });
-    } else if (frame.type === FrameType.Audio && audioDecodePipeline) {
-      audioDecodePipeline.decodeChunk({ timestampUs: frame.timestamp * 1000, data: frame.payload });
-    }
+    receiver.route(frame, { slot: selectedSlot, video: videoDecodePipeline, audio: audioDecodePipeline });
   }
 
   /**
@@ -532,6 +542,7 @@ export function mountApp(options: MountAppOptions): void {
     const pipeline = await startVideoDecodePipeline(canvas, {
       clock: mediaClock,
       onKeyframeNeeded: () => wsClient.sendControl({ kind: "request-keyframe" }),
+      onOverload: () => receiver.reportCongestion(),
     });
     if (generation !== videoPipelineGeneration) {
       // Superseded by a later join/resume/toggle while the decoder was starting up.
@@ -760,6 +771,11 @@ export function mountApp(options: MountAppOptions): void {
   });
 
   document.addEventListener("keydown", (event) => {
+    if (isStatsShortcut(event)) {
+      event.preventDefault();
+      statsOverlay.toggle();
+      return;
+    }
     if (event.key !== "Escape") return;
     // The panel takes precedence: it's the innermost thing open, so Escape should
     // dismiss it before leaving fullscreen.

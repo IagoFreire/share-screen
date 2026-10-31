@@ -12,6 +12,12 @@ import { handleVoiceClose, handleVoiceMessage } from "../voice/voiceServer.js";
 const HEARTBEAT_INTERVAL_MS = 20_000;
 
 /**
+ * Largest message accepted. A 1080p keyframe at the "Máxima" bitrate is well under 1 MB;
+ * ws's own default (100 MiB) would let one client make the relay buffer that much.
+ */
+const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
+
+/**
  * Detects and reaps dead connections. Without this, a peer that vanishes without a
  * clean TCP close (a crash, not a graceful disconnect) never fires the 'close' event:
  * Node has no way to know the socket is gone until the OS eventually times it out,
@@ -47,7 +53,7 @@ function createEndpoint(
   onMessage: (ws: WebSocket, bytes: Uint8Array) => void,
   onClose: (ws: WebSocket) => void,
 ): WebSocketServer {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   attachHeartbeat(wss);
 
   wss.on("connection", (ws: WebSocket) => {

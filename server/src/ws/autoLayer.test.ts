@@ -47,4 +47,29 @@ describe("auto layer", () => {
     expect(auto.report("sent", 17_000)).toBeNull();
     expect(auto.layer).toBe(1);
   });
+
+  it("steps down at once when the viewer reports congestion", () => {
+    const auto = createAutoLayer(3, 0);
+
+    expect(auto.congested(1000)).toBe(1);
+    expect(auto.layer).toBe(1);
+  });
+
+  it("gives a step down time to drain before taking another", () => {
+    const auto = createAutoLayer(3, 0);
+    auto.congested(1000);
+
+    // The old layer's backlog is still arriving: the report says nothing new yet.
+    expect(auto.congested(2000)).toBeNull();
+    expect(auto.congested(5000)).toBe(2);
+  });
+
+  it("a congestion report restarts the quiet stretch before stepping up", () => {
+    const auto = createAutoLayer(3, 0);
+    auto.congested(1000);
+    auto.congested(10_000); // down to the lightest, and the clean stretch starts over
+
+    expect(auto.report("sent", 17_000)).toBeNull();
+    expect(auto.report("sent", 25_500)).toBe(1);
+  });
 });

@@ -41,7 +41,8 @@ export function audioRebaseUs(videoOffsetUs: number | null, audioOffsetUs: numbe
   return Math.abs(difference) > CLOCK_MISMATCH_US ? difference : 0;
 }
 
-async function sampleClock(track: MediaStreamTrack, count: number): Promise<ClockSample[]> {
+/** Reads up to `count` frames from a clone of `track`, noting when each was read. */
+export async function sampleClock(track: MediaStreamTrack, count: number): Promise<ClockSample[]> {
   const probe = track.clone();
   const reader = new MediaStreamTrackProcessor<VideoFrame | AudioData>({ track: probe }).readable.getReader();
   const samples: ClockSample[] = [];

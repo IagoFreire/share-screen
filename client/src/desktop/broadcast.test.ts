@@ -32,6 +32,7 @@ function setup() {
     stop: () => {
       sessionStops += 1;
     },
+    reannounce: () => {},
     handleControl: () => false,
     onEnded: () => {},
   };

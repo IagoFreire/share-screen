@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countAudience, type ViewerSelection } from "./audience.js";
+import { countAudience, videoLayersInUse, type ViewerSelection } from "./audience.js";
 
 function viewer(overrides: Partial<ViewerSelection> = {}): ViewerSelection {
   return { userId: "7", selectedSlot: 0, isPaused: false, videoDisabled: false, ownPreview: false, ...overrides };
@@ -41,5 +41,32 @@ describe("countAudience", () => {
     const viewers = [viewer({ userId: "1", videoDisabled: true }), viewer({ userId: "2" })];
 
     expect(countAudience(viewers, 0, "42")).toEqual({ watchers: 2, videoWatchers: 1 });
+  });
+});
+
+describe("videoLayersInUse", () => {
+  it("lists each simulcast layer some viewer of the broadcast receives, once and in order", () => {
+    const viewers = [
+      { ...viewer({ userId: "1" }), layer: 2 },
+      { ...viewer({ userId: "2" }), layer: 0 },
+      { ...viewer({ userId: "3" }), layer: 2 },
+      { ...viewer({ userId: "4", selectedSlot: 1 }), layer: 1 },
+    ];
+
+    expect(videoLayersInUse(viewers, 0, "42")).toEqual([0, 2]);
+  });
+
+  it("ignores viewers that receive no picture", () => {
+    const viewers = [
+      { ...viewer({ userId: "1", videoDisabled: true }), layer: 1 },
+      { ...viewer({ userId: "2", isPaused: true }), layer: 2 },
+      { ...viewer({ userId: "42" }), layer: 0 }, // the presenter's own, not opened on purpose
+    ];
+
+    expect(videoLayersInUse(viewers, 0, "42")).toEqual([]);
+  });
+
+  it("keeps the layer of a preview the presenter opened on purpose", () => {
+    expect(videoLayersInUse([{ ...viewer({ userId: "42", ownPreview: true }), layer: 1 }], 0, "42")).toEqual([1]);
   });
 });

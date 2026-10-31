@@ -13,6 +13,8 @@ interface PresenterSlot {
   layers: LayerInfo[] | undefined;
   /** Last audience told to the presenter; null until the relay first counts it. */
   audience: Audience | null;
+  /** Last "layers-in-use" told to the presenter; null until the relay first counts it. */
+  layersInUse: number[] | null;
 }
 
 /**
@@ -82,6 +84,21 @@ export class Room {
     return true;
   }
 
+  /**
+   * Records which simulcast layers someone receives from `slot`. Returns false when that
+   * is what was already recorded, so the presenter only hears about actual changes.
+   */
+  setLayersInUse(slot: number, layers: number[]): boolean {
+    const presenter = this.presenters.get(slot);
+    if (!presenter) return false;
+    const previous = presenter.layersInUse;
+    if (previous && previous.length === layers.length && previous.every((layer, i) => layer === layers[i])) {
+      return false;
+    }
+    this.presenters.set(slot, { ...presenter, layersInUse: [...layers] });
+    return true;
+  }
+
   /** How many simulcast versions the broadcast on `slot` carries (1 if it isn't simulcast). */
   layerCountOf(slot: number): number {
     return this.presenters.get(slot)?.layers?.length || 1;
@@ -113,15 +130,16 @@ export class Room {
   ): number | null {
     // The audience starts unknown either way: a re-registered presenter restarts its
     // encoders, so it has to be told again whether anyone is watching.
+    const fresh = { ws, presenterId, audioParams, layers, audience: null, layersInUse: null };
     const existing = this.slotOf(ws);
     if (existing !== null) {
-      this.presenters.set(existing, { ws, presenterId, audioParams, layers, audience: null });
+      this.presenters.set(existing, fresh);
       return existing;
     }
 
     for (let slot = 0; slot < MAX_PRESENTERS_PER_ROOM; slot += 1) {
       if (!this.presenters.has(slot)) {
-        this.presenters.set(slot, { ws, presenterId, audioParams, layers, audience: null });
+        this.presenters.set(slot, fresh);
         return slot;
       }
     }

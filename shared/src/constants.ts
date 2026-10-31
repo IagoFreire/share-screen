@@ -147,13 +147,15 @@ export const AUDIO_JITTER_BUFFER_SECONDS = 0.3;
 export const AUDIO_MAX_DRIFT_SECONDS = AUDIO_JITTER_BUFFER_SECONDS + 0.5;
 
 /**
- * Consecutive audio packets are placed by their own capture timestamps so that a lost
- * packet leaves a hole instead of dragging everything after it earlier. Timestamps that
- * land this close to where the previous packet ended are snapped flush against it
- * anyway: the discrepancy at that scale is float rounding from the millisecond wire
- * format, and honouring it literally would open sub-millisecond gaps that click.
+ * Audio plays sample after sample, flush, unless a packet's timestamp says this much (or
+ * more) is missing before it: that is a real hole at the source, kept as silence so the
+ * sound stays where its timestamps put it. Anything smaller is the sender's sound card
+ * drifting from the clock that stamps packets (tens of ppm, a few ms a minute) plus
+ * millisecond rounding on the wire -- honouring it opened a gap or an overlap that
+ * clicked every minute or two. Video follows the sound that actually plays (see
+ * playback/mediaClock.ts), so playing flush costs no lip sync.
  */
-export const AUDIO_CONTINUITY_TOLERANCE_SECONDS = 0.005;
+export const AUDIO_CONTINUITY_TOLERANCE_SECONDS = 0.04;
 
 /**
  * Same idea for video: decoded frames are held briefly and rendered on a clock instead

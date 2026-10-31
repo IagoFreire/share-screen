@@ -62,7 +62,10 @@ export interface BroadcastOptions {
   onInterrupted(message: string): void;
 }
 
-type WsLike = Pick<WsClient, "connect" | "close" | "sendControl" | "sendFrame">;
+type WsLike = Pick<WsClient, "connect" | "close" | "sendControl" | "sendFrame"> & {
+  /** What the socket still has to send; drives the upload gate (see session/uplinkGate.ts). */
+  readonly bufferedAmount?: number;
+};
 
 /** Seams for tests; production uses the real socket and presenter session. */
 export interface BroadcastFactories {
@@ -142,6 +145,7 @@ export async function startDesktopBroadcast(
   const session = factories.createSession({
     sendFrame: (header, payload) => ws.sendFrame(header, payload),
     sendControl: (message) => ws.sendControl(message),
+    sendBufferedBytes: () => ws.bufferedAmount ?? 0,
     capture: async (captureQuality) => {
       const streams = await startScreenCapture(captureQuality);
       if (audio.mode !== "apps" || !appAudio) return streams;

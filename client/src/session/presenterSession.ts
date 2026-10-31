@@ -1,6 +1,7 @@
 import {
   FrameType,
   SLOT_PRESENTER,
+  TARGET_AUDIO_BITRATE_KBPS_DEFAULT,
   type ControlMessage,
   type FrameHeader,
   type QualityPreset,
@@ -8,6 +9,7 @@ import {
 import type { CaptureStreams } from "../capture/screenCapture.js";
 import type { startAudioEncodePipeline, AudioEncodePipeline } from "../capture/audioEncodePipeline.js";
 import type { startVideoEncodePipeline, VideoEncodePipeline } from "../capture/videoEncodePipeline.js";
+import { createBitrateController, createUplinkGate, uplinkHighWaterBytes, type UplinkGate } from "./uplinkGate.js";
 
 /**
  * One person's broadcast, independent of any page: capture -> encode -> frames on the
@@ -23,6 +25,8 @@ export interface PresenterSessionDeps {
   startAudio: typeof startAudioEncodePipeline;
   /** How far to shift the audio onto the video's clock (see capture/clockOffset.ts); 0 when absent. */
   measureAudioRebaseUs?(videoTrack: MediaStreamTrack, audioTrack: MediaStreamTrack): Promise<number>;
+  /** Bytes the socket still holds unsent (WebSocket.bufferedAmount); see uplinkGate.ts. */
+  sendBufferedBytes?(): number;
   presenterId: string | null;
 }
 
@@ -36,8 +40,15 @@ export interface PresenterSession {
   /** Idempotent; tells the relay only if a broadcast was actually live. */
   stop(): void;
   /**
-   * Handles presenting-started, request-keyframe, request-stop-presenting and
-   * audience-changed (which pauses the broadcast while nobody watches); false otherwise.
+   * The connection to the relay was lost and came back. The relay freed the broadcast
+   * when the old socket closed, so it has to be announced again on the new one -- or
+   * every frame from here on is ignored while this side still thinks it's live.
+   */
+  reannounce(): void;
+  /**
+   * Handles presenting-started, request-keyframe, request-stop-presenting,
+   * audience-changed and layers-in-use (which pause what nobody receives); false
+   * otherwise.
    */
   handleControl(message: ControlMessage): boolean;
   /** Called when the broadcast ends without the caller asking: source closed, or the relay stopped it. */
@@ -62,33 +73,62 @@ function copyChunk(chunk: EncodedVideoChunk | EncodedAudioChunk): Uint8Array {
   return payload;
 }
 
+/** One simulcast version (index = layer, 0 = best). */
+interface LayerState {
+  pipeline: VideoEncodePipeline | null;
+  gate: UplinkGate;
+  /** Per-layer sequence number: a viewer only ever receives one layer. */
+  clock: number;
+  paused: boolean;
+}
+
 export function createPresenterSession(deps: PresenterSessionDeps): PresenterSession {
   let isPresenting = false;
   /** Assigned by the relay in presenting-started; SLOT_PRESENTER until then. */
   let slot = SLOT_PRESENTER;
   let audioClock = 0;
-  /** One encoder per simulcast layer, index = layer (0 = best). */
-  let videos: VideoEncodePipeline[] = [];
+  let layers: LayerState[] = [];
   /** Downscaled clones feeding the lower layers; ours to stop. */
   let layerTracks: MediaStreamTrack[] = [];
   let audio: AudioEncodePipeline | null = null;
+  /** The start-presenting sent at start, repeated by reannounce(). */
+  let announcement: ControlMessage | null = null;
   /** From audience-changed: nobody wants the picture / nobody is watching at all. */
   let videoPaused = false;
   let audioPaused = false;
+  /** From layers-in-use; null (everything runs) until the relay says. */
+  let layersInUse: Set<number> | null = null;
+  let bitrate = createBitrateController();
   const endedListeners: Array<() => void> = [];
 
   function stop(): void {
     if (!isPresenting) return;
-    for (const pipeline of videos) pipeline.stop();
-    videos = [];
+    for (const layer of layers) layer.pipeline?.stop();
+    layers = [];
     for (const track of layerTracks) track.stop();
     layerTracks = [];
     audio?.stop();
     audio = null;
+    announcement = null;
     isPresenting = false;
     videoPaused = false;
     audioPaused = false;
+    layersInUse = null;
     deps.sendControl({ kind: "stop-presenting" });
+  }
+
+  /**
+   * Pauses each encoder nobody receives: all of them while no viewer wants the picture,
+   * otherwise the simulcast layers left out of layers-in-use. Only touches an encoder
+   * whose state actually changes -- resuming one forces a keyframe.
+   */
+  function applyPauses(): void {
+    for (const [index, layer] of layers.entries()) {
+      const pause = videoPaused || (layersInUse !== null && !layersInUse.has(index));
+      if (pause === layer.paused) continue;
+      layer.paused = pause;
+      layer.pipeline?.setPaused(pause);
+    }
   }
 
   /**
@@ -98,10 +138,41 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
    */
   function applyAudience(watchers: number, videoWatchers: number): void {
     audioPaused = watchers === 0;
-    const pauseVideo = videoWatchers === 0;
-    if (pauseVideo === videoPaused) return;
-    videoPaused = pauseVideo;
-    for (const pipeline of videos) pipeline.setPaused(pauseVideo);
+    videoPaused = videoWatchers === 0;
+    applyPauses();
+  }
+
+  function applyBitrateScale(scale: number | null): void {
+    if (scale === null) return;
+    for (const layer of layers) layer.pipeline?.setBitrateScale(scale);
+  }
+
+  function sendVideo(layer: LayerState, index: number, simulcast: boolean, chunk: EncodedVideoChunk): void {
+    if (layer.paused) return; // still in the encoder when the pause came
+
+    const isKey = chunk.type === "key";
+    const decision = layer.gate.admit(isKey, deps.sendBufferedBytes?.() ?? 0);
+    const now = performance.now();
+    if (decision === "congested") {
+      applyBitrateScale(bitrate.onCongestion(now));
+      return;
+    }
+    if (decision === "drop-and-request-keyframe") layer.pipeline?.requestKeyframe();
+    if (decision !== "send") return;
+    applyBitrateScale(bitrate.onHealthy(now));
+
+    layer.clock += 1;
+    deps.sendFrame(
+      {
+        slot,
+        type: FrameType.Video,
+        timestamp: chunk.timestamp / MICROSECONDS_PER_MILLISECOND,
+        clock: layer.clock,
+        keyFrame: isKey,
+        ...(simulcast ? { layer: index } : {}),
+      },
+      copyChunk(chunk),
+    );
   }
 
   function endOnItsOwn(): void {
@@ -115,43 +186,29 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
       return isPresenting;
     },
 
-    async start(quality, layers) {
+    async start(quality, plannedLayers) {
       const { videoTrack, audioTrack } = await deps.capture(quality);
-      const plan = layers && layers.length > 1 ? layers : [quality];
+      const plan = plannedLayers && plannedLayers.length > 1 ? plannedLayers : [quality];
       const simulcast = plan.length > 1;
+      const totalBitsPerSecond =
+        plan.reduce((sum, preset) => sum + preset.bitrateKbps, 0) * 1000 + TARGET_AUDIO_BITRATE_KBPS_DEFAULT * 1000;
+      const highWaterBytes = uplinkHighWaterBytes(totalBitsPerSecond);
+      bitrate = createBitrateController();
 
-      for (const [layer, preset] of plan.entries()) {
+      for (const [index, preset] of plan.entries()) {
         let track = videoTrack;
-        if (layer > 0) {
+        if (index > 0) {
           // Chromium scales and drops frames on a clone for us, so each encoder receives
           // frames at its own size and rate from the one capture.
           track = videoTrack.clone();
           await track.applyConstraints({ height: { ideal: preset.height }, frameRate: { ideal: preset.framerate } });
           layerTracks.push(track);
         }
-        // Per-layer sequence numbers: a viewer only ever receives one layer.
-        let clock = 0;
-        videos.push(
-          await deps.startVideo(
-            track,
-            (chunk) => {
-              if (videoPaused) return; // still in the encoder when the pause came
-              clock += 1;
-              deps.sendFrame(
-                {
-                  slot,
-                  type: FrameType.Video,
-                  timestamp: chunk.timestamp / MICROSECONDS_PER_MILLISECOND,
-                  clock,
-                  keyFrame: chunk.type === "key",
-                  ...(simulcast ? { layer } : {}),
-                },
-                copyChunk(chunk),
-              );
-            },
-            { quality: preset },
-          ),
-        );
+        const layer: LayerState = { pipeline: null, gate: createUplinkGate(highWaterBytes), clock: 0, paused: false };
+        layers.push(layer);
+        layer.pipeline = await deps.startVideo(track, (chunk) => sendVideo(layer, index, simulcast, chunk), {
+          quality: preset,
+        });
       }
 
       if (audioTrack) {
@@ -172,19 +229,27 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
 
       videoTrack.addEventListener("ended", endOnItsOwn);
 
-      deps.sendControl({
+      announcement = {
         kind: "start-presenting",
         presenterId: deps.presenterId,
         audio: audio?.params ?? null,
         ...(simulcast
           ? { layers: plan.map((preset, layer) => ({ layer, height: preset.height, framerate: preset.framerate })) }
           : {}),
-      });
+      };
+      deps.sendControl(announcement);
       isPresenting = true;
       return { hasAudio: audioTrack !== null };
     },
 
     stop,
+
+    reannounce() {
+      if (!isPresenting || !announcement) return;
+      deps.sendControl(announcement);
+      // Whoever is watching on the relay's side starts from scratch.
+      for (const layer of layers) layer.pipeline?.requestKeyframe();
+    },
 
     handleControl(message) {
       switch (message.kind) {
@@ -193,14 +258,18 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
           return true;
         case "request-keyframe":
           // The relay names the layer a viewer is switching to; without one, refresh all.
-          if (message.layer === undefined) for (const pipeline of videos) pipeline.requestKeyframe();
-          else videos[message.layer]?.requestKeyframe();
+          if (message.layer === undefined) for (const layer of layers) layer.pipeline?.requestKeyframe();
+          else layers[message.layer]?.pipeline?.requestKeyframe();
           return true;
         case "request-stop-presenting":
           endOnItsOwn();
           return true;
         case "audience-changed":
           applyAudience(message.watchers, message.videoWatchers);
+          return true;
+        case "layers-in-use":
+          layersInUse = new Set(message.layers);
+          applyPauses();
           return true;
         default:
           return false;

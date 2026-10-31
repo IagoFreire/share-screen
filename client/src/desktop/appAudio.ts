@@ -1,4 +1,5 @@
 import type { DesktopAppAudio } from "@screenshare-bot/shared";
+import { estimateClockOffsetUs, sampleClock } from "../capture/clockOffset.js";
 
 /**
  * Turns the audio helper's PCM (every app except the excluded ones, see
@@ -58,20 +59,17 @@ export function createAudioTimeline(blockUs: number): { stamp(estimatedCaptureUs
   };
 }
 
-/** How far the video track's timestamps are from performance.now(), in µs. */
+/** Frames to read when measuring the video clock; more pin the delivery delay down better. */
+const VIDEO_CLOCK_SAMPLES = 5;
+
+/**
+ * How far the video track's timestamps are from performance.now(), in µs. Each frame
+ * arrives some delivery delay after it was stamped; a single frame measured that delay
+ * into the offset (lip sync varied 7-33 ms from one live to the next), so the least
+ * delayed of several is taken instead.
+ */
 async function measureVideoClockOffsetUs(videoTrack: MediaStreamTrack): Promise<number> {
-  const probe = videoTrack.clone();
-  const reader = new MediaStreamTrackProcessor({ track: probe }).readable.getReader();
-  try {
-    const { value: frame } = await reader.read();
-    if (!frame) return 0;
-    const offset = frame.timestamp - performance.now() * 1000;
-    frame.close();
-    return offset;
-  } finally {
-    void reader.cancel();
-    probe.stop();
-  }
+  return estimateClockOffsetUs(await sampleClock(videoTrack, VIDEO_CLOCK_SAMPLES)) ?? 0;
 }
 
 export interface AppAudioTrack {

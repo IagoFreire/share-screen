@@ -12,10 +12,28 @@ export interface VideoChunkInput {
   data: Uint8Array;
 }
 
+export interface VideoPlaybackStats {
+  /** Frames dropped because playback fell behind or the queue overflowed. */
+  droppedFrames: number;
+  /** Decoded frames waiting for their moment on screen. */
+  queuedFrames: number;
+  /** Chunks inside the decoder, not decoded yet. */
+  decodeQueue: number;
+  /** Times the decoder fell so far behind that its backlog was thrown away. */
+  overloads: number;
+  waitingForKeyframe: boolean;
+}
+
 export interface VideoDecodePipeline {
   decodeChunk: (chunk: VideoChunkInput) => void;
   /** Frames dropped because playback fell behind or the queue overflowed. */
   readonly droppedFrames: number;
+  /**
+   * Ignores deltas until the next keyframe: a frame went missing (see the sequence check
+   * in streamReceiver.ts), and every delta after it would decode into corruption.
+   */
+  awaitKeyframe: () => void;
+  stats: () => VideoPlaybackStats;
   /**
    * Drops every buffered frame and resets the clock so the next decoded frame is
    * presented immediately instead of the queue playing out. Call this when the tab was
@@ -47,20 +65,33 @@ export interface VideoDecodePipelineOptions {
   /** Audio clock to present against; omitted when the broadcast carries no audio. */
   clock?: MediaClock;
   /**
-   * Called when the decoder has hit an error and can't render anything until a fresh
-   * keyframe arrives. Without this the picture stays frozen until the presenter's next
-   * periodic keyframe, so the recovery gap is exactly KEYFRAME_INTERVAL_MS long -- which
-   * is precisely the interval we want to raise for quality's sake. Asking on demand is
-   * what makes a long periodic interval safe.
+   * Called when the decoder can't render anything until a fresh keyframe arrives (it
+   * failed, refused a chunk, or had to drop its backlog). Without this the picture stays
+   * frozen until the presenter's next periodic keyframe, KEYFRAME_INTERVAL_MS away --
+   * asking on demand is what makes a long periodic interval safe.
    */
   onKeyframeNeeded?: () => void;
+  /**
+   * Called when this machine can't decode the stream in real time; "auto" quality then
+   * steps down (see report-congestion).
+   */
+  onOverload?: () => void;
 }
+
+/**
+ * Chunks waiting inside the decoder past this (~0.5 s at 60 fps) mean this machine
+ * decodes slower than the stream arrives. The backlog would only grow, putting the
+ * picture further behind with every second, so it is dropped instead.
+ */
+const MAX_DECODE_QUEUE = 30;
+/** A typical display refresh until the real one has been measured. */
+const DEFAULT_REFRESH_MS = 1000 / 60;
 
 export async function startVideoDecodePipeline(
   canvas: HTMLCanvasElement,
   options: VideoDecodePipelineOptions = {},
 ): Promise<VideoDecodePipeline> {
-  const { clock, onKeyframeNeeded } = options;
+  const { clock, onKeyframeNeeded, onOverload } = options;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas 2D context unavailable.");
 
@@ -72,8 +103,11 @@ export async function startVideoDecodePipeline(
 
   const queue: QueuedFrame[] = [];
   let droppedFrames = 0;
+  let overloads = 0;
   let stopped = false;
   let rafHandle = 0;
+  /** A decoder can only start on a keyframe; true until one has been decoded. */
+  let waitingForKeyframe = true;
 
   // Maps stream timestamps onto local wall-clock time. Established from the first frame
   // and re-established whenever playback falls behind (see presentFrames).
@@ -81,6 +115,9 @@ export async function startVideoDecodePipeline(
   let basePerfMs = 0;
   /** Frames older than this are discarded on arrival; raised by resyncToLive(). */
   let minAcceptableTimestampUs = 0;
+  /** Measured display refresh interval, from the animation frames themselves. */
+  let refreshMs = DEFAULT_REFRESH_MS;
+  let lastRafAt: number | null = null;
 
   function drawFrame(frame: VideoFrame): void {
     if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
@@ -127,12 +164,24 @@ export async function startVideoDecodePipeline(
     return baseTimestampUs + (nowMs - basePerfMs) * 1000;
   }
 
-  /** Presents every frame whose scheduled time has arrived, drawing only the newest. */
-  function presentFrames(): void {
+  /**
+   * Presents every frame whose scheduled time has arrived, drawing only the newest.
+   *
+   * What is drawn now reaches the screen at the next refresh, so frames are picked for
+   * that moment rather than this one -- otherwise every picture shows a refresh late and
+   * the sound runs a frame ahead of it.
+   */
+  function presentFrames(rafNow: number): void {
     rafHandle = requestAnimationFrame(presentFrames);
+    if (lastRafAt !== null) {
+      const interval = rafNow - lastRafAt;
+      // Ignore the long gaps of a throttled or hidden window.
+      if (interval > 0 && interval < 100) refreshMs += (interval - refreshMs) * 0.1;
+    }
+    lastRafAt = rafNow;
     if (queue.length === 0) return;
 
-    const dueUpToUs = dueThresholdUs();
+    const dueUpToUs = dueThresholdUs() + refreshMs * 1000;
 
     let due: QueuedFrame | undefined;
     while (queue.length > 0 && queue[0]!.timestampUs <= dueUpToUs) {
@@ -169,71 +218,108 @@ export async function startVideoDecodePipeline(
     }
   }
 
-  const decoder = new VideoDecoder({
-    output: (frame) => {
-      if (stopped) {
-        frame.close();
-        return;
-      }
+  function onFrame(frame: VideoFrame): void {
+    if (stopped) {
+      frame.close();
+      return;
+    }
 
-      // Chunks handed to the decoder before a resync keep producing output afterwards,
-      // so emptying the queue isn't enough on its own -- that backlog would flow right
-      // back in and re-establish the delay we just dropped. Anything older than the
-      // resync point is stale by definition.
-      if (frame.timestamp < minAcceptableTimestampUs) {
-        frame.close();
-        droppedFrames += 1;
-        return;
-      }
+    // Chunks handed to the decoder before a resync keep producing output afterwards,
+    // so emptying the queue isn't enough on its own -- that backlog would flow right
+    // back in and re-establish the delay we just dropped. Anything older than the
+    // resync point is stale by definition.
+    if (frame.timestamp < minAcceptableTimestampUs) {
+      frame.close();
+      droppedFrames += 1;
+      return;
+    }
 
-      queue.push({ frame, timestampUs: frame.timestamp });
+    queue.push({ frame, timestampUs: frame.timestamp });
 
-      // Bounded queue: VideoFrames hold real memory, so a stalled viewer can't be
-      // allowed to accumulate them indefinitely.
-      while (queue.length > VIDEO_JITTER_BUFFER_MAX_FRAMES) {
-        queue.shift()!.frame.close();
-        droppedFrames += 1;
-        // The buffer overflowed, so the clock mapping is stale; re-prime it.
-        baseTimestampUs = null;
-      }
+    // Bounded queue: VideoFrames hold real memory, so a stalled viewer can't be
+    // allowed to accumulate them indefinitely.
+    while (queue.length > VIDEO_JITTER_BUFFER_MAX_FRAMES) {
+      queue.shift()!.frame.close();
+      droppedFrames += 1;
+      // The buffer overflowed, so the clock mapping is stale; re-prime it.
+      baseTimestampUs = null;
+    }
 
-      dropOverdueFrames();
-    },
-    error: (error) => {
-      console.error("VideoDecoder error:", error);
-      // Resync on the next keyframe rather than staying broken. Mid-stream resolution
-      // changes (the presenter resizing a shared window) can upset the decoder, and the
-      // encoder emits a keyframe right after any such change.
-      waitingForKeyframe = true;
-      // Don't wait out the periodic interval for one -- ask now.
-      onKeyframeNeeded?.();
-    },
-  });
-  decoder.configure(decoderConfig);
+    dropOverdueFrames();
+  }
 
-  let waitingForKeyframe = true;
+  function needKeyframe(): void {
+    waitingForKeyframe = true;
+    onKeyframeNeeded?.();
+  }
+
+  /**
+   * WebCodecs closes a decoder for good when decoding fails (verified in Chrome: the
+   * state goes to "closed" and every later decode() throws), so recovering means a new
+   * one -- waiting for a keyframe on the dead one froze the picture until "Atualizar".
+   */
+  function createDecoder(): VideoDecoder {
+    const created = new VideoDecoder({
+      output: onFrame,
+      error: (error) => {
+        console.error("VideoDecoder error:", error);
+        // Mid-stream resolution changes (the presenter resizing a shared window) and
+        // hardware hiccups both land here; the next chunk gets a fresh decoder.
+        needKeyframe();
+      },
+    });
+    created.configure(decoderConfig);
+    return created;
+  }
+  let decoder = createDecoder();
+
   rafHandle = requestAnimationFrame(presentFrames);
 
   return {
     decodeChunk: (chunk) => {
-      if (decoder.state !== "configured") return;
+      if (stopped) return;
+      if (decoder.state === "closed") decoder = createDecoder();
+
+      if (decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
+        decoder.close();
+        decoder = createDecoder();
+        overloads += 1;
+        needKeyframe();
+        onOverload?.();
+      }
 
       // A decoder can only start on a keyframe; silently wait until one arrives
       // (e.g. right after connecting, or after a request-keyframe round-trip).
       if (waitingForKeyframe && !chunk.keyFrame) return;
-      waitingForKeyframe = false;
 
-      decoder.decode(
-        new EncodedVideoChunk({
-          type: chunk.keyFrame ? "key" : "delta",
-          timestamp: chunk.timestampUs,
-          data: chunk.data,
-        }),
-      );
+      try {
+        decoder.decode(
+          new EncodedVideoChunk({
+            type: chunk.keyFrame ? "key" : "delta",
+            timestamp: chunk.timestampUs,
+            data: chunk.data,
+          }),
+        );
+        waitingForKeyframe = false;
+      } catch (error) {
+        // Refused outright (e.g. "a key frame is required"): start over on a keyframe.
+        console.error("Video decode refused a chunk:", error);
+        needKeyframe();
+      }
     },
     get droppedFrames() {
       return droppedFrames;
     },
+    awaitKeyframe: () => {
+      waitingForKeyframe = true;
+    },
+    stats: () => ({
+      droppedFrames,
+      queuedFrames: queue.length,
+      decodeQueue: decoder.decodeQueueSize,
+      overloads,
+      waitingForKeyframe,
+    }),
     resyncToLive: () => {
       // Everything buffered is behind live, so the newest of it marks the cutoff: any
       // frame decoded from here on that predates it belongs to the backlog being

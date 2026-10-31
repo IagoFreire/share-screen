@@ -45,3 +45,27 @@ export function countAudience(viewers: Iterable<ViewerSelection>, slot: number, 
   }
   return { watchers, videoWatchers };
 }
+
+/** Whether `viewer` receives the picture of the broadcast on `slot` (see countAudience). */
+function receivesVideo(viewer: ViewerSelection, slot: number, presenterId: string | null): boolean {
+  if (viewer.isPaused || viewer.selectedSlot !== slot || viewer.videoDisabled) return false;
+  if (presenterId !== null && viewer.userId === presenterId) return viewer.ownPreview;
+  return true;
+}
+
+/**
+ * The simulcast layers someone receives from the broadcast on `slot`, ascending. The
+ * presenter pauses every other layer (see "layers-in-use"): an encoder nobody is fed
+ * from costs upload and GPU time for nothing.
+ */
+export function videoLayersInUse(
+  viewers: Iterable<ViewerSelection & { layer: number }>,
+  slot: number,
+  presenterId: string | null,
+): number[] {
+  const layers = new Set<number>();
+  for (const viewer of viewers) {
+    if (receivesVideo(viewer, slot, presenterId)) layers.add(viewer.layer);
+  }
+  return [...layers].sort((a, b) => a - b);
+}

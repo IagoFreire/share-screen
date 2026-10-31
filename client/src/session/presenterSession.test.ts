@@ -32,7 +32,7 @@ function fakeChunk(bytes: number[], timestampUs: number, type: "key" | "delta" =
   };
 }
 
-function setup(options: { withAudio?: boolean; audioRebaseUs?: number } = {}) {
+function setup(options: { withAudio?: boolean; audioRebaseUs?: number; bufferedBytes?: () => number } = {}) {
   const video = fakeTrack();
   const frames: Array<{ header: FrameHeader; payload: Uint8Array }> = [];
   const controls: ControlMessage[] = [];
@@ -41,6 +41,7 @@ function setup(options: { withAudio?: boolean; audioRebaseUs?: number } = {}) {
   let keyframeRequests = 0;
   let videoStops = 0;
   const videoPauses: boolean[] = [];
+  const bitrateScales: number[] = [];
   let audioOptions: unknown;
 
   const deps: PresenterSessionDeps = {
@@ -60,6 +61,9 @@ function setup(options: { withAudio?: boolean; audioRebaseUs?: number } = {}) {
         setPaused: (paused) => {
           videoPauses.push(paused);
         },
+        setBitrateScale: (scale) => {
+          bitrateScales.push(scale);
+        },
         stop: () => {
           videoStops += 1;
         },
@@ -71,6 +75,7 @@ function setup(options: { withAudio?: boolean; audioRebaseUs?: number } = {}) {
       return { params: { sampleRate: 48000, channels: 2 }, stop: () => {} };
     },
     ...(options.audioRebaseUs === undefined ? {} : { measureAudioRebaseUs: async () => options.audioRebaseUs! }),
+    ...(options.bufferedBytes ? { sendBufferedBytes: options.bufferedBytes } : {}),
     presenterId: "42",
   };
 
@@ -84,6 +89,7 @@ function setup(options: { withAudio?: boolean; audioRebaseUs?: number } = {}) {
     keyframeRequests: () => keyframeRequests,
     videoStops: () => videoStops,
     videoPauses,
+    bitrateScales,
     audioOptions: () => audioOptions,
   };
 }
@@ -192,6 +198,65 @@ describe("presenter session", () => {
     const { session } = setup();
     expect(session.handleControl({ kind: "viewer-count", count: 2 })).toBe(false);
   });
+
+  it("announces the broadcast again on a new connection and asks for a fresh picture", async () => {
+    const { session, controls, keyframeRequests } = setup();
+    await session.start(QUALITY);
+
+    session.reannounce();
+
+    expect(controls.filter((message) => message.kind === "start-presenting")).toHaveLength(2);
+    expect(keyframeRequests()).toBe(1);
+  });
+
+  it("re-announcing does nothing once the broadcast has stopped", async () => {
+    const { session, controls } = setup();
+    await session.start(QUALITY);
+    session.stop();
+
+    session.reannounce();
+
+    expect(controls.filter((message) => message.kind === "start-presenting")).toHaveLength(1);
+  });
+});
+
+describe("presenter session upload", () => {
+  it("drops video but keeps the sound while the upload backs up", async () => {
+    let buffered = 0;
+    const { session, frames, emitVideo, emitAudio } = setup({ bufferedBytes: () => buffered });
+    await session.start(QUALITY);
+
+    buffered = 50 * 1024 * 1024;
+    emitVideo(fakeChunk([1], 1000));
+    emitAudio(fakeChunk([2], 1000));
+
+    expect(frames.map((frame) => frame.header.type)).toEqual([FrameType.Audio]);
+  });
+
+  it("restarts the picture on a keyframe once the upload drains", async () => {
+    let buffered = 50 * 1024 * 1024;
+    const { session, frames, emitVideo, keyframeRequests } = setup({ bufferedBytes: () => buffered });
+    await session.start(QUALITY);
+    emitVideo(fakeChunk([1], 1000)); // dropped: backed up
+
+    buffered = 0;
+    emitVideo(fakeChunk([2], 2000)); // drained: asks for a keyframe, still no use alone
+    emitVideo(fakeChunk([3], 3000, "key"));
+    emitVideo(fakeChunk([4], 4000));
+
+    expect(keyframeRequests()).toBe(1);
+    expect(frames.map((frame) => frame.header.keyFrame)).toEqual([true, false]);
+  });
+
+  it("lowers the encoders' bitrate while the upload can't keep up", async () => {
+    const { session, emitVideo, bitrateScales } = setup({ bufferedBytes: () => 50 * 1024 * 1024 });
+    await session.start(QUALITY);
+
+    emitVideo(fakeChunk([1], 1000));
+
+    expect(bitrateScales).toHaveLength(1);
+    expect(bitrateScales[0]).toBeLessThan(1);
+  });
 });
 
 describe("presenter session audience", () => {
@@ -276,6 +341,7 @@ describe("presenter session simulcast", () => {
     } as unknown as MediaStreamTrack;
     const emitters: Array<(chunk: ReturnType<typeof fakeChunk>) => void> = [];
     const keyframes: number[] = [];
+    const pauses: boolean[][] = [];
     const frames: FrameHeader[] = [];
     const controls: ControlMessage[] = [];
 
@@ -287,19 +353,45 @@ describe("presenter session simulcast", () => {
         const index = emitters.length;
         emitters.push((chunk) => onChunk(chunk as unknown as EncodedVideoChunk));
         keyframes.push(0);
+        pauses.push([]);
         return {
           requestKeyframe: () => {
             keyframes[index] += 1;
           },
-          setPaused: () => {},
+          setPaused: (paused) => {
+            pauses[index].push(paused);
+          },
+          setBitrateScale: () => {},
           stop: () => {},
         };
       },
       startAudio: async () => ({ params: { sampleRate: 48000, channels: 2 }, stop: () => {} }),
       presenterId: "42",
     });
-    return { session, clones, emitters, keyframes, frames, controls };
+    return { session, clones, emitters, keyframes, pauses, frames, controls };
   }
+
+  it("pauses the versions no viewer receives and wakes them when one does", async () => {
+    const { session, pauses, emitters, frames } = simulcastSetup();
+    await session.start(LAYERS[0], LAYERS);
+
+    session.handleControl({ kind: "layers-in-use", layers: [1] });
+    emitters[0](fakeChunk([1], 1000, "key")); // still in the paused encoder: never sent
+    session.handleControl({ kind: "layers-in-use", layers: [0, 1] });
+
+    expect(pauses).toEqual([[true, false], [], [true]]);
+    expect(frames).toEqual([]);
+  });
+
+  it("keeps every version paused while nobody wants the picture, whatever layers are in use", async () => {
+    const { session, pauses } = simulcastSetup();
+    await session.start(LAYERS[0], LAYERS);
+    session.handleControl({ kind: "layers-in-use", layers: [0] });
+
+    session.handleControl({ kind: "audience-changed", watchers: 1, videoWatchers: 0 });
+
+    expect(pauses).toEqual([[true], [true], [true]]);
+  });
 
   it("encodes one version per layer, each tagged with its layer and its own clock", async () => {
     const { session, emitters, frames } = simulcastSetup();

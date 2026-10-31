@@ -60,6 +60,11 @@ export class WsClient {
     this.socket = socket;
   }
 
+  /** Bytes queued on the socket but not sent yet; 0 while disconnected. */
+  get bufferedAmount(): number {
+    return this.socket?.bufferedAmount ?? 0;
+  }
+
   sendControl(message: ControlMessage): void {
     if (this.socket?.readyState !== WebSocket.OPEN) return;
     this.socket.send(encodeControlMessage(0, message));

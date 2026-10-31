@@ -17,11 +17,16 @@ import { isUserInVoiceChannel } from "../auth/verifyMember.js";
 import { verifySessionToken } from "../auth/session.js";
 import { pausesSiblingConnections, resolveJoinIdentity, startsWatchingNothing } from "./joinIdentity.js";
 import { createAutoLayer, type AutoLayer } from "./autoLayer.js";
-import { countAudience } from "./audience.js";
+import { countAudience, videoLayersInUse } from "./audience.js";
+import { createKeyframeThrottle } from "./keyframeThrottle.js";
 import { countSpectators, listRoomPeople } from "./viewerList.js";
 
 /** The frame header carries the layer in 2 bits. */
 const MAX_LAYERS = 4;
+
+/** At most one keyframe request per broadcast layer this often when frames get dropped. */
+const DROP_KEYFRAME_MIN_INTERVAL_MS = 1000;
+const dropKeyframeThrottle = createKeyframeThrottle(DROP_KEYFRAME_MIN_INTERVAL_MS);
 import { resolveChannelName, resolveGuildName, resolveUserName } from "../auth/discordNames.js";
 
 interface ConnectionState {
@@ -221,14 +226,23 @@ function syncAudiences(room: Room): boolean {
   room.forEachViewer((viewer) => viewers.push(getState(viewer)));
 
   let pausedChanged = false;
-  for (const { slot, presenterId } of room.streams) {
+  for (const { slot, presenterId, layers } of room.streams) {
+    const presenter = room.getPresenter(slot);
     const wasPaused = room.isPaused(slot);
     const audience = countAudience(viewers, slot, presenterId);
-    if (!room.setAudience(slot, audience)) continue;
+    if (room.setAudience(slot, audience)) {
+      if (presenter) send(presenter.ws, { kind: "audience-changed", ...audience });
+      if (room.isPaused(slot) !== wasPaused) pausedChanged = true;
+    }
 
-    const presenter = room.getPresenter(slot);
-    if (presenter) send(presenter.ws, { kind: "audience-changed", ...audience });
-    if (room.isPaused(slot) !== wasPaused) pausedChanged = true;
+    // Simulcast: only the versions somebody is actually fed from need encoding.
+    if (layers) {
+      const watching = viewers
+        .filter((viewer) => viewer.selectedSlot === slot)
+        .map((viewer) => ({ ...viewer, layer: effectiveLayer(viewer, room, slot) }));
+      const inUse = videoLayersInUse(watching, slot, presenterId);
+      if (room.setLayersInUse(slot, inUse) && presenter) send(presenter.ws, { kind: "layers-in-use", layers: inUse });
+    }
   }
   return pausedChanged;
 }
@@ -311,6 +325,7 @@ export function handleMessage(ws: WebSocket, data: Uint8Array): void {
   const isVideo = frame.type === FrameType.Video;
   const frameLayer = frame.layer ?? 0;
   const now = Date.now();
+  let layersMoved = false;
 
   room.forEachViewer((viewer) => {
     const viewerState = getState(viewer);
@@ -321,19 +336,35 @@ export function handleMessage(ws: WebSocket, data: Uint8Array): void {
       if (viewerState.videoDisabled) return; // chose audio-only
       // Simulcast: exactly one version per viewer, so egress stays "viewers x one layer".
       if (frameLayer !== effectiveLayer(viewerState, room, slot)) return;
-      if (!viewerState.hasReceivedKeyframe) {
-        // Nothing this viewer's decoder can use yet -- skip rather than waste egress
-        // on a frame it will just discard on arrival.
-        if (!frame.keyFrame) return;
-        viewerState.hasReceivedKeyframe = true;
-      }
+      // Nothing this viewer's decoder can use until a keyframe -- skip rather than waste
+      // egress on a frame it would only discard (or, mid-stream, decode into garbage).
+      if (!viewerState.hasReceivedKeyframe && !frame.keyFrame) return;
     }
     const result = sendOrDrop(viewer, outgoing, priority);
+    if (!isVideo) return;
 
-    if (isVideo && viewerState.layerChoice === "auto" && room.layerCountOf(slot) > 1) {
-      if (viewerState.autoLayer?.report(result, now) != null) announceLayer(viewer, viewerState, room);
+    if (result === "sent") {
+      if (frame.keyFrame) viewerState.hasReceivedKeyframe = true;
+    } else if (result === "dropped") {
+      // Every later delta references the frame just lost: forwarding them would paint
+      // corruption until the next periodic keyframe, seconds away. Hold them back and
+      // ask for a fresh one -- a short freeze instead of a smeared picture.
+      viewerState.hasReceivedKeyframe = false;
+      if (dropKeyframeThrottle.allow(`${room.id}:${slot}:${frameLayer}`, now)) {
+        requestKeyframeFromSlot(room, slot, frameLayer);
+      }
+    }
+
+    if (viewerState.layerChoice === "auto" && room.layerCountOf(slot) > 1) {
+      if (viewerState.autoLayer?.report(result, now) != null) {
+        announceLayer(viewer, viewerState, room);
+        layersMoved = true;
+      }
     }
   });
+
+  // A viewer stepping onto another version may wake a layer the presenter had paused.
+  if (layersMoved) syncAudiences(room);
 }
 
 /**
@@ -520,6 +551,22 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       state.layerChoice = choice;
       state.autoLayer = null;
       announceLayer(ws, state, room);
+      syncAudiences(room); // the new version may be one the presenter had paused
+      return;
+    }
+
+    // The viewer measured frames arriving later and later. Behind the tunnel the relay's
+    // own send buffer rarely shows it, so for "auto" this is the main reason to step down.
+    case "report-congestion": {
+      if (!state.roomId || state.selectedSlot === null || state.layerChoice !== "auto") return;
+      const room = roomManager.getRoom(state.roomId);
+      if (!room || room.layerCountOf(state.selectedSlot) < 2) return;
+
+      effectiveLayer(state, room, state.selectedSlot); // makes sure "auto" tracks this broadcast
+      if (state.autoLayer?.congested(Date.now()) != null) {
+        announceLayer(ws, state, room);
+        syncAudiences(room);
+      }
       return;
     }
 

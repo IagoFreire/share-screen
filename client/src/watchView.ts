@@ -10,6 +10,8 @@ import { WsClient } from "./net/wsClient.js";
 import { startVideoDecodePipeline, type VideoDecodePipeline } from "./playback/videoDecodePipeline.js";
 import { MAX_VOLUME, startAudioDecodePipeline, type AudioDecodePipeline } from "./playback/audioDecodePipeline.js";
 import { createMediaClock } from "./playback/mediaClock.js";
+import { createStreamReceiver } from "./playback/streamReceiver.js";
+import { createStatsOverlay, isStatsShortcut } from "./ui/statsOverlay.js";
 import {
   ICON_BELL,
   ICON_END_STREAM,
@@ -175,6 +177,18 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   // than its own -- see playback/mediaClock.ts. Outlives both, since they're torn down
   // and rebuilt independently (pause/resume, audio-only toggle, audio param changes).
   const mediaClock = createMediaClock();
+  // Routes every media frame to the pipelines (see playback/streamReceiver.ts).
+  const receiver = createStreamReceiver({
+    requestKeyframe: () => wsClient.sendControl({ kind: "request-keyframe" }),
+    reportCongestion: () => wsClient.sendControl({ kind: "report-congestion" }),
+  });
+  const statsOverlay = createStatsOverlay(player, () => ({
+    audio: audioDecodePipeline?.stats() ?? null,
+    video: videoDecodePipeline?.stats() ?? null,
+    receiver: receiver.stats(),
+    layer: currentStream()?.layers ? currentLayer : null,
+    autoLayer: layerChoice === "auto",
+  }));
 
   let videoDecodePipeline: VideoDecodePipeline | null = null;
   let audioDecodePipeline: AudioDecodePipeline | null = null;
@@ -391,9 +405,9 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     lastAudioParams = audioParamsForSelection();
     render();
 
+    // No keyframe request of our own: the relay asks the presenter for one on select-stream.
     await ensureVideoPipeline();
     void ensureAudioPipeline(lastAudioParams);
-    if (slot !== null) wsClient.sendControl({ kind: "request-keyframe" });
   }
 
   function stopWatching(): void {
@@ -525,6 +539,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     const pipeline = await startVideoDecodePipeline(canvas, {
       clock: mediaClock,
       onKeyframeNeeded: () => wsClient.sendControl({ kind: "request-keyframe" }),
+      onOverload: () => receiver.reportCongestion(),
     });
     if (generation !== videoPipelineGeneration) {
       // Superseded by a later join/resume/toggle while the decoder was starting up.
@@ -610,6 +625,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
       case "streams-changed": {
         streams = message.streams;
+        const previousSlot = selectedSlot;
         // The watched stream may have ended; the server already moved this connection
         // to a surviving slot, so follow it instead of receiving nothing. Someone who
         // left the live stays out -- the server keeps them on no slot too.
@@ -624,7 +640,10 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
         render();
         if (!isPausedHere) {
           void ensureAudioPipeline(lastAudioParams);
-          if (isWatching()) wsClient.sendControl({ kind: "request-keyframe" });
+          // Only a moved viewer needs a fresh picture. Every viewer asking on every list
+          // change (anyone going live, stopping or pausing) made the presenter spend
+          // keyframes -- 5-15x a normal frame -- for decoders that were fine.
+          if (isWatching() && selectedSlot !== previousSlot) wsClient.sendControl({ kind: "request-keyframe" });
         }
         return;
       }
@@ -670,15 +689,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   }
 
   function handleFrame(frame: EncodedFrame): void {
-    if (frame.type === FrameType.Video && videoDecodePipeline) {
-      videoDecodePipeline.decodeChunk({
-        keyFrame: frame.keyFrame ?? false,
-        timestampUs: frame.timestamp * 1000,
-        data: frame.payload,
-      });
-    } else if (frame.type === FrameType.Audio && audioDecodePipeline) {
-      audioDecodePipeline.decodeChunk({ timestampUs: frame.timestamp * 1000, data: frame.payload });
-    }
+    receiver.route(frame, { slot: selectedSlot, video: videoDecodePipeline, audio: audioDecodePipeline });
   }
 
   resumeButton.addEventListener("click", () => {
@@ -780,6 +791,10 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   // Escape dismisses the list; fullscreen already handles its own Escape natively.
   function onKeydown(event: KeyboardEvent): void {
     if (event.key === "Escape" && broadcastsPanel.isOpen) broadcastsPanel.close();
+    if (isStatsShortcut(event)) {
+      event.preventDefault();
+      statsOverlay.toggle();
+    }
   }
 
   // --- Resync after being backgrounded (see App.ts for the full rationale) ---
@@ -810,6 +825,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
       broadcastsPanel.close();
       qualityMenu.close();
       viewersMenu.close();
+      statsOverlay.destroy();
       document.removeEventListener("fullscreenchange", onFullscreenChange);
       document.removeEventListener("keydown", onKeydown);
       document.removeEventListener("visibilitychange", onVisibilityChange);

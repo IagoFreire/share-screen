@@ -12,6 +12,7 @@
 //!       Raw 48 kHz stereo f32 little-endian PCM on stdout, in 10 ms blocks, until stdin
 //!       closes (the app quit or ended the live).
 
+mod drift;
 mod policy;
 
 use std::collections::{HashMap, VecDeque};
@@ -27,16 +28,20 @@ use wasapi::{
     initialize_mta,
 };
 
+use drift::DriftResampler;
 use policy::{ExclusionPolicy, ProcessInfo, capture_roots, clamp_all, json_escape, mix_into};
 
 const SAMPLE_RATE: usize = 48_000;
 const CHANNELS: usize = 2;
 /// 10 ms per block written to stdout.
-const BLOCK_SAMPLES: usize = SAMPLE_RATE / 100 * CHANNELS;
+const BLOCK_FRAMES: usize = SAMPLE_RATE / 100;
+const BLOCK_SAMPLES: usize = BLOCK_FRAMES * CHANNELS;
 /// A source starts feeding the mix once it holds this much (30 ms): capture packets and
 /// mixer ticks run on different clocks, and without a little slack they alternate
 /// between "nothing yet" and "two packets", which is heard as crackle.
 const PRIME_SAMPLES: usize = BLOCK_SAMPLES * 3;
+/// The level each source is steered back to (see drift.rs): the same 30 ms cushion.
+const TARGET_FRAMES: usize = PRIME_SAMPLES / CHANNELS;
 /// Past this (200 ms) the oldest audio is dropped, so a stalled mixer never drifts late.
 const MAX_BUFFERED_SAMPLES: usize = SAMPLE_RATE * CHANNELS / 5;
 const RESCAN_INTERVAL: Duration = Duration::from_secs(1);
@@ -154,6 +159,8 @@ struct Source {
     samples: Arc<Mutex<VecDeque<f32>>>,
     stopped: Arc<AtomicBool>,
     primed: bool,
+    /// Reads the source at its sound card's pace rather than the mixer's.
+    resampler: DriftResampler,
 }
 
 fn read_f32_frames(bytes: &mut VecDeque<u8>, block_align: usize, out: &mut Vec<f32>) {
@@ -207,7 +214,7 @@ fn start_source(pid: u32) -> Source {
         }
         thread_stopped.store(true, Ordering::Relaxed);
     });
-    Source { samples, stopped, primed: false }
+    Source { samples, stopped, primed: false, resampler: DriftResampler::new() }
 }
 
 /// Opens captures for newly playing apps and closes the ones that went away or that
@@ -265,11 +272,12 @@ fn mix_block(sources: &mut HashMap<u32, Source>) -> Vec<f32> {
                 continue;
             }
         }
-        let take = queue.len().min(BLOCK_SAMPLES);
-        let chunk: Vec<f32> = queue.drain(..take).collect();
+        let chunk = source.resampler.pull(&mut queue, BLOCK_FRAMES, TARGET_FRAMES);
         mix_into(&mut mix, &chunk);
-        if queue.is_empty() {
-            source.primed = false; // ran dry: build the cushion up again
+        if chunk.len() < BLOCK_SAMPLES {
+            // Ran dry: build the cushion up again.
+            source.primed = false;
+            source.resampler.restart();
         }
     }
     clamp_all(&mut mix);

@@ -177,7 +177,15 @@ function main(): void {
   const wsClient = new WsClient(wsUrl, {
     onOpen: () => {
       setStatus("Conectado. Entrando na sala...");
-      wsClient.sendControl({ kind: "join", roomId, userId: getUserId(), guildId: getGuildId() });
+      // presenterOnly: this tab never renders anything, so it must neither receive
+      // someone's broadcast nor pause the user's own Activity as a "second tab".
+      wsClient.sendControl({
+        kind: "join",
+        roomId,
+        userId: getUserId(),
+        guildId: getGuildId(),
+        presenterOnly: true,
+      });
     },
     onClose: () => setStatus("Desconectado. Tentando reconectar..."),
     onControl: (message) => handleControl(message),
@@ -189,6 +197,7 @@ function main(): void {
   const session = createPresenterSession({
     sendFrame: (header, payload) => wsClient.sendFrame(header, payload),
     sendControl: (message) => wsClient.sendControl(message),
+    sendBufferedBytes: () => wsClient.bufferedAmount,
     capture: startScreenCapture,
     startVideo: startVideoEncodePipeline,
     startAudio: startAudioEncodePipeline,
@@ -212,7 +221,14 @@ function main(): void {
 
     switch (message.kind) {
       case "joined":
-        setStatus("");
+        // A reconnect: the relay dropped the broadcast with the old socket and ignores
+        // frames from one it doesn't know presents, so announce it again.
+        if (session.isPresenting) {
+          session.reannounce();
+          setStatus("Reconectado. A transmissão continua.");
+        } else {
+          setStatus("");
+        }
         return;
       case "room-full":
         setStatus("Sala cheia - nao foi possivel entrar.");

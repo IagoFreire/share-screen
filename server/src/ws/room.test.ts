@@ -72,3 +72,24 @@ describe("Room audiences", () => {
     expect(room.setAudience(slot, { watchers: 2, videoWatchers: 1 })).toBe(true);
   });
 });
+
+describe("Room layers in use", () => {
+  it("reports whether the set of layers in use actually changed", () => {
+    const room = new Room("c1", 10);
+    const slot = room.allocateSlot(presenterSocket, "42", null, LAYERS)!;
+
+    expect(room.setLayersInUse(slot, [0])).toBe(true);
+    expect(room.setLayersInUse(slot, [0])).toBe(false);
+    expect(room.setLayersInUse(slot, [0, 1])).toBe(true);
+  });
+
+  it("forgets what it told a presenter that re-registers", () => {
+    const room = new Room("c1", 10);
+    const slot = room.allocateSlot(presenterSocket, "42", null, LAYERS)!;
+    room.setLayersInUse(slot, [1]);
+
+    room.allocateSlot(presenterSocket, "42", null, LAYERS);
+
+    expect(room.setLayersInUse(slot, [1])).toBe(true);
+  });
+});

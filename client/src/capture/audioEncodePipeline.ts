@@ -34,6 +34,8 @@ export interface AudioEncodeOptions {
 
 /** Max effort: for audio this costs little CPU (unlike video) and buys real quality. */
 const OPUS_COMPLEXITY_DEFAULT = 10;
+/** Wait this long before rebuilding a failed encoder, so a broken one can't spin. */
+const ENCODER_RETRY_DELAY_MS = 500;
 
 export async function startAudioEncodePipeline(
   track: MediaStreamTrack,
@@ -72,7 +74,8 @@ export async function startAudioEncodePipeline(
   }
 
   // The encoder stamps packets by counting samples; put the real capture times back.
-  const timeline = createCaptureTimeline(params.sampleRate, options.timestampOffsetUs ?? 0);
+  const newTimeline = () => createCaptureTimeline(params.sampleRate, options.timestampOffsetUs ?? 0);
+  let timeline = newTimeline();
   function restamp(chunk: EncodedAudioChunk): EncodedAudioChunk {
     const frames = Math.round(((chunk.duration ?? 0) * params.sampleRate) / 1_000_000);
     const timestamp = frames > 0 ? timeline.next(frames) : null;
@@ -87,11 +90,22 @@ export async function startAudioEncodePipeline(
     });
   }
 
-  const encoder = new AudioEncoder({
-    output: (chunk) => onChunk(restamp(chunk)),
-    error: (error) => console.error("AudioEncoder error:", error),
-  });
-  encoder.configure(encoderConfig);
+  // A failed encoder is closed for good by WebCodecs; it gets rebuilt instead of leaving
+  // the broadcast silent. Whatever the dead one swallowed never comes out, so the rebuilt
+  // one starts a fresh capture timeline -- the old one would stamp it with stale times.
+  let retryAt = 0;
+  function createEncoder(): AudioEncoder {
+    const created = new AudioEncoder({
+      output: (chunk) => onChunk(restamp(chunk)),
+      error: (error) => {
+        console.error("AudioEncoder error:", error);
+        retryAt = performance.now() + ENCODER_RETRY_DELAY_MS;
+      },
+    });
+    created.configure(encoderConfig);
+    return created;
+  }
+  let encoder = createEncoder();
 
   const processor = new MediaStreamTrackProcessor<AudioData>({ track, maxBufferSize: TRACK_BUFFER_FRAMES });
   const reader = processor.readable.getReader();
@@ -101,9 +115,21 @@ export async function startAudioEncodePipeline(
     while (!stopped) {
       const { done, value: data } = await reader.read();
       if (done || !data) break;
-      timeline.record(data.timestamp, Math.round((data.numberOfFrames * params.sampleRate) / data.sampleRate));
-      encoder.encode(data);
-      data.close();
+      try {
+        if (encoder.state === "closed") {
+          if (performance.now() < retryAt) continue;
+          encoder = createEncoder();
+          timeline = newTimeline();
+        }
+        timeline.record(data.timestamp, Math.round((data.numberOfFrames * params.sampleRate) / data.sampleRate));
+        encoder.encode(data);
+      } catch (error) {
+        console.error("Audio encode failed; rebuilding the encoder:", error);
+        retryAt = performance.now() + ENCODER_RETRY_DELAY_MS;
+        if (encoder.state !== "closed") encoder.close();
+      } finally {
+        data.close();
+      }
     }
   })();
   pump.catch((error) => console.error("Audio encode pump stopped unexpectedly:", error));

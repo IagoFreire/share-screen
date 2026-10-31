@@ -270,6 +270,18 @@ export type ControlMessage =
    * hear or see. Sent on start and whenever either number changes.
    */
   | { kind: "audience-changed"; watchers: number; videoWatchers: number }
+  /**
+   * Server -> a simulcast presenter: the layers some viewer receives right now. The
+   * others are paused, so a broadcast whose viewers all sit on one version doesn't spend
+   * upload and an encoder on the rest. Sent on start and whenever the set changes.
+   */
+  | { kind: "layers-in-use"; layers: number[] }
+  /**
+   * Viewer -> server: frames are arriving later and later (measured against their own
+   * capture timestamps), or this machine can't decode them in time. The relay can't see
+   * it itself behind a proxy that buffers for it, so "auto" steps down on this signal.
+   */
+  | { kind: "report-congestion" }
   /** Viewer -> server, and server -> presenter; `layer` (to the presenter) names the encoder. */
   | { kind: "request-keyframe"; layer?: number }
   /**
