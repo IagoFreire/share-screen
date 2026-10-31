@@ -22,3 +22,5 @@ export const ICON_VIDEO = `<svg viewBox="0 0 24 24" width="17" height="17" fill=
 // A dimmed camera icon plus a plain diagonal line, rather than one hand-authored
 // "camera with a built-in slash" path -- much less likely to end up subtly malformed.
 export const ICON_VIDEO_OFF = `<svg viewBox="0 0 24 24" width="17" height="17"><path fill="currentColor" opacity="0.45" d="${VIDEO_CAMERA_PATH}"/><line x1="2" y1="2" x2="22" y2="22" stroke="currentColor" stroke-width="2"/></svg>`;
+export const ICON_PEOPLE = `<svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>`;
+export const ICON_DOWNLOAD = `<svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg>`;

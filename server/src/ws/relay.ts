@@ -18,6 +18,7 @@ import { verifySessionToken } from "../auth/session.js";
 import { pausesSiblingConnections, resolveJoinIdentity, startsWatchingNothing } from "./joinIdentity.js";
 import { createAutoLayer, type AutoLayer } from "./autoLayer.js";
 import { countAudience } from "./audience.js";
+import { listRoomPeople } from "./viewerList.js";
 
 /** The frame header carries the layer in 2 bits. */
 const MAX_LAYERS = 4;
@@ -126,6 +127,17 @@ async function sendActiveBroadcasts(ws: WebSocket, onlyRoomId: string | null): P
   );
 
   send(ws, { kind: "active-broadcasts", broadcasts });
+}
+
+/** Sends who is in `room` (the viewer list), names looked up like the broadcast list's. */
+async function sendViewers(ws: WebSocket, room: Room): Promise<void> {
+  const connections: ConnectionState[] = [];
+  room.forEachViewer((viewer) => connections.push(getState(viewer)));
+
+  const viewers = await Promise.all(
+    listRoomPeople(connections).map(async (person) => ({ ...person, name: await resolveUserName(person.userId) })),
+  );
+  send(ws, { kind: "viewers", viewers });
 }
 
 /** Whether this user may end broadcasts other than their own (see config.adminUserIds). */
@@ -508,6 +520,12 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
     // Everyone gets the list -- it's how a viewer picks which broadcast to watch -- but
     // only an admin sees other rooms. Scoped here rather than trusted to the client:
     // a non-admin's list never even contains another channel's broadcasts.
+    case "request-viewers": {
+      const room = state.roomId ? roomManager.getRoom(state.roomId) : undefined;
+      if (room) sendViewers(ws, room).catch((error) => console.error("Failed to send viewer list:", error));
+      return;
+    }
+
     case "request-active-broadcasts": {
       if (isAdmin(state.userId)) {
         sendActiveBroadcasts(ws, null).catch((error) => console.error("Failed to send broadcast list:", error));

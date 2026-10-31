@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8" /><title>Prévia: Compartilhar sua tela</title></head>
+<body>
+<div id="app"></div>
+<script type="module">
+// Temporary static copy of present.ts's card, so it can be seen without connecting.
+import "/src/ui/app.css";
+const ICON_SCREEN = `<svg viewBox="0 0 24 24" width="40" height="40" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg>`;
+document.querySelector("#app").innerHTML = `
+    <div class="present-card">
+      <div class="present-icon">${ICON_SCREEN}</div>
+      <h1 class="present-title">Compartilhar sua tela</h1>
+      <p class="present-lead">
+        A transmissão aparece para todos que abrirem a atividade no canal de voz.
+        Você pode deixar esta aba em segundo plano depois de começar.
+      </p>
+      <div class="quality-row">
+        <label class="quality-field"><span>Resolução</span>
+          <select><option>480p</option><option>720p</option><option selected>1080p</option></select></label>
+        <label class="quality-field"><span>Taxa de quadros</span>
+          <select><option>30 fps</option><option selected>60 fps</option></select></label>
+        <label class="quality-field"><span>Qualidade</span>
+          <select><option selected>Equilibrada</option><option>Alta</option><option>Máxima</option></select></label>
+      </div>
+      <p class="quality-hint">≈ 6 Mbps de upload por espectador.</p>
+      <p class="audio-notice is-warning">Nenhum áudio foi capturado. Marque “compartilhar áudio” ao escolher a aba.</p>
+      <button id="share-btn" class="btn-primary btn-lg" type="button">Compartilhar tela</button>
+    </div>`;
+const button = document.querySelector("#share-btn");
+button.addEventListener("click", () => {
+  const live = button.classList.toggle("is-stop");
+  button.textContent = live ? "Parar transmissão" : "Compartilhar tela";
+});
+</script>
+</body>
+</html>

@@ -19,6 +19,7 @@ import {
   ICON_IDLE,
   ICON_LIST,
   ICON_MUTED,
+  ICON_DOWNLOAD,
   ICON_OPEN_EXTERNAL,
   ICON_END_STREAM,
   ICON_REFRESH,
@@ -30,6 +31,10 @@ import {
 } from "./icons.js";
 import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } from "./broadcastsPanel.js";
 import { createQualityMenu, type QualityChoice } from "./qualityMenu.js";
+import { createViewersMenu } from "./viewersMenu.js";
+
+/** Where the desktop app (Janja) is downloaded from. */
+const DESKTOP_APP_DOWNLOAD_URL = "https://github.com/IagoFreire/share-screen/releases";
 
 /**
  * Lockout after the "ao vivo" button: every click makes the presenter send a keyframe,
@@ -101,6 +106,7 @@ export function mountApp(options: MountAppOptions): void {
             <button id="mute-btn" class="icon-btn" type="button" title="Mudo">${ICON_VOLUME}</button>
             <input id="volume-slider" class="volume-slider" type="range" min="0" max="100" value="100" style="--fill: 100%" />
           </div>
+          <button id="download-app-btn" class="icon-btn" type="button" title="Baixar o app para Windows">${ICON_DOWNLOAD}</button>
           <button id="watch-external-btn" class="icon-btn" type="button" title="Assistir numa aba do navegador">${ICON_OPEN_EXTERNAL}</button>
           <button id="fullscreen-btn" class="icon-btn" type="button" title="Tela cheia">${ICON_FULLSCREEN_ENTER}</button>
         </div>
@@ -119,6 +125,7 @@ export function mountApp(options: MountAppOptions): void {
   const muteButton = root.querySelector<HTMLButtonElement>("#mute-btn")!;
   const volumeSlider = root.querySelector<HTMLInputElement>("#volume-slider")!;
   const watchExternalButton = root.querySelector<HTMLButtonElement>("#watch-external-btn")!;
+  const downloadAppButton = root.querySelector<HTMLButtonElement>("#download-app-btn")!;
   const fullscreenButton = root.querySelector<HTMLButtonElement>("#fullscreen-btn")!;
   const canvas = root.querySelector<HTMLCanvasElement>("#viewer-canvas")!;
   const idleScreen = root.querySelector<HTMLDivElement>("#idle-screen")!;
@@ -198,6 +205,13 @@ export function mountApp(options: MountAppOptions): void {
   });
   liveButton.before(qualityMenu.element);
 
+  // Who is in the room, beside the count it names. Lazy like the broadcast list.
+  const viewersMenu = createViewersMenu({
+    requestList: () => wsClient.sendControl({ kind: "request-viewers" }),
+    context: () => ({ streams, selectedSlot, userId }),
+  });
+  statusText.after(viewersMenu.element);
+
   /** Single place that reflects presenter state into the button, status line and idle screen. */
   function render(): void {
     qualityMenu.update(isWatchingSelf() ? undefined : currentStream()?.layers, layerChoice, currentLayer);
@@ -221,7 +235,7 @@ export function mountApp(options: MountAppOptions): void {
     } else if (streams.length > 1) {
       statusText.textContent = `${streams.length} transmissões — ${viewerCount} espectador(es).`;
     } else if (hasPresenter()) {
-      statusText.textContent = `Alguém está transmitindo — ${viewerCount} espectador(es).`;
+      statusText.textContent = `${viewerCount} espectador(es).`;
     } else {
       statusText.textContent = `${viewerCount} pessoa(s) na sala.`;
     }
@@ -293,7 +307,7 @@ export function mountApp(options: MountAppOptions): void {
     const controlsDisabled = watchingSelf || isPausedHere;
     muteButton.disabled = controlsDisabled;
     volumeSlider.disabled = controlsDisabled;
-    muteButton.innerHTML = controlsDisabled || Number(volumeSlider.value) === 0 ? ICON_MUTED : ICON_VOLUME;
+    syncMuteButton();
 
     // Unlike mute/volume, video isn't blocked while presenting -- once resumed (see
     // showVideoOffSelfUi above) your Activity connection genuinely has a video pipeline
@@ -308,6 +322,7 @@ export function mountApp(options: MountAppOptions): void {
 
     videoToggleButton.disabled = isPausedHere || !hasPresenter();
     videoToggleButton.innerHTML = videoDisabled ? ICON_VIDEO_OFF : ICON_VIDEO;
+    videoToggleButton.classList.toggle("is-off", videoDisabled);
     videoToggleButton.title = videoDisabled ? "Ativar vídeo" : "Desativar vídeo (somente áudio)";
 
     // Only offered while there's a video pipeline to refresh (see jumpToLive).
@@ -388,7 +403,12 @@ export function mountApp(options: MountAppOptions): void {
 
       case "viewer-count":
         viewerCount = message.count;
+        viewersMenu.refresh();
         render();
+        return;
+
+      case "viewers":
+        viewersMenu.show(message.viewers);
         return;
 
       case "layer-changed":
@@ -670,6 +690,19 @@ export function mountApp(options: MountAppOptions): void {
 
   watchExternalButton.addEventListener("click", () => void openWatchTab());
 
+  downloadAppButton.addEventListener("click", () => void openDownloadPage());
+
+  /** The desktop app's installers live on the GitHub releases page. */
+  async function openDownloadPage(): Promise<void> {
+    try {
+      const { opened } = await getDiscordSdk().commands.openExternalLink({ url: DESKTOP_APP_DOWNLOAD_URL });
+      if (opened === false) setPageStatus(`O Discord bloqueou o link. Baixe em ${DESKTOP_APP_DOWNLOAD_URL}`);
+    } catch (error) {
+      console.error("Failed to open the download page:", error);
+      setPageStatus(`Não foi possível abrir o link. Baixe em ${DESKTOP_APP_DOWNLOAD_URL}`);
+    }
+  }
+
   async function openWatchTab(): Promise<void> {
     const params = new URLSearchParams({ room: roomId, user: userId });
     if (guildId) params.set("guild", guildId);
@@ -691,9 +724,16 @@ export function mountApp(options: MountAppOptions): void {
     const volume = Number(volumeSlider.value) / 100;
     volumeSlider.style.setProperty("--fill", `${volumeSlider.value}%`);
     audioDecodePipeline?.setVolume(volume);
-    muteButton.innerHTML = volume === 0 ? ICON_MUTED : ICON_VOLUME;
+    syncMuteButton();
     if (volume > 0) lastVolumeBeforeMute = volume;
   });
+
+  /** Muted icon while there's no sound to hear; flagged "off" only when the user muted it. */
+  function syncMuteButton(): void {
+    const isMuted = Number(volumeSlider.value) === 0;
+    muteButton.innerHTML = muteButton.disabled || isMuted ? ICON_MUTED : ICON_VOLUME;
+    muteButton.classList.toggle("is-off", !muteButton.disabled && isMuted);
+  }
 
   muteButton.addEventListener("click", () => {
     const isMuted = Number(volumeSlider.value) === 0;
@@ -701,7 +741,7 @@ export function mountApp(options: MountAppOptions): void {
     volumeSlider.value = String(Math.round(nextVolume * 100));
     volumeSlider.style.setProperty("--fill", `${volumeSlider.value}%`);
     audioDecodePipeline?.setVolume(nextVolume);
-    muteButton.innerHTML = nextVolume === 0 ? ICON_MUTED : ICON_VOLUME;
+    syncMuteButton();
   });
 
   // --- "Fullscreen" ---

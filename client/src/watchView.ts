@@ -25,6 +25,7 @@ import {
 } from "./ui/icons.js";
 import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } from "./ui/broadcastsPanel.js";
 import { createQualityMenu, type QualityChoice } from "./ui/qualityMenu.js";
+import { createViewersMenu } from "./ui/viewersMenu.js";
 import { autoWatchSlot, isOwnStream } from "./ui/streamChoice.js";
 
 /** Lockout after the "ao vivo" button -- see App.ts. */
@@ -152,6 +153,13 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   });
   liveButton.before(qualityMenu.element);
 
+  // Who is in the room, beside the count it names. Lazy like the broadcast list below.
+  const viewersMenu = createViewersMenu({
+    requestList: () => wsClient.sendControl({ kind: "request-viewers" }),
+    context: () => ({ streams, selectedSlot, userId }),
+  });
+  statusText.after(viewersMenu.element);
+
   // Same list as in the Activity (see ui/broadcastsPanel.ts). Everything it reads is
   // looked up lazily, so it can be built before the state and socket declared below.
   const broadcastsPanel = createBroadcastsPanel({
@@ -233,7 +241,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     } else if (hasPresenter()) {
       statusText.textContent = isSelf()
         ? `Sua transmissão — ${viewerCount} espectador(es).`
-        : `Alguém está transmitindo — ${viewerCount} espectador(es).`;
+        : `${viewerCount} espectador(es).`;
     } else {
       statusText.textContent = `${viewerCount} pessoa(s) na sala.`;
     }
@@ -582,7 +590,12 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
       case "viewer-count":
         viewerCount = message.count;
+        viewersMenu.refresh();
         render();
+        return;
+
+      case "viewers":
+        viewersMenu.show(message.viewers);
         return;
 
       case "layer-changed":
@@ -796,6 +809,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
       audioDecodePipeline = null;
       broadcastsPanel.close();
       qualityMenu.close();
+      viewersMenu.close();
       document.removeEventListener("fullscreenchange", onFullscreenChange);
       document.removeEventListener("keydown", onKeydown);
       document.removeEventListener("visibilitychange", onVisibilityChange);

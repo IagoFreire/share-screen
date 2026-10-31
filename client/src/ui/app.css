@@ -1,8 +1,13 @@
 :root {
   color-scheme: dark;
-  font-family: system-ui, sans-serif;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   --accent: #5865f2;
   --accent-hover: #4752c4;
+  /* Player controls (see .icon-btn). */
+  --player-tile: rgba(30, 31, 34, 0.6);
+  --player-text: #dbdee1;
+  --player-red: #f23f43;
+  --player-off: rgba(242, 63, 67, 0.26);
 }
 
 body {
@@ -44,41 +49,62 @@ body.viewer .status {
   margin: 0;
 }
 
-/* --- present.html: the standalone tab the Activity opens for actual capture --- */
+/* --- present.html: the standalone tab the Activity opens for actual capture. Laid out
+   like the desktop app's "Transmitir" dialog (desktop.css .desk-modal): a flat card,
+   small caps labels, dark square fields and a plain Discord button. --- */
 .present-card {
   max-width: 460px;
   margin: 6vh auto 0;
-  padding: 2rem 1.75rem;
-  border-radius: 14px;
-  background: #2b2d31;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
-  text-align: center;
+  padding: 24px;
+  box-sizing: border-box;
+  border-radius: 10px;
+  background: #313338;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 24px 70px rgba(0, 0, 0, 0.6);
+  text-align: left;
 }
 
 .present-icon {
-  color: var(--accent);
-  margin-bottom: 0.25rem;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 16px;
+  border-radius: 14px;
+  background: rgba(88, 101, 242, 0.16);
+  color: #a3abff;
+}
+
+.present-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+/* The heading block is centred; the fields and notes below stay left-aligned. */
+.present-title,
+.present-lead {
+  text-align: center;
 }
 
 .present-title {
-  margin: 0 0 0.5rem;
-  font-size: 1.35rem;
+  margin: 0 0 4px;
+  font-size: 18px;
   font-weight: 700;
 }
 
 .present-lead {
-  margin: 0 0 1.5rem;
-  font-size: 0.9rem;
-  line-height: 1.5;
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.45;
   color: #b5bac1;
 }
 
 .quality-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
 .quality-field {
@@ -87,20 +113,117 @@ body.viewer .status {
   flex: 1 1 8rem;
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
-  text-align: left;
-  font-size: 0.78rem;
-  color: #b5bac1;
+  gap: 8px;
+  color: #80848e;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
+/* The browser's arrow swapped for the app's chevron (voicePanel.css's device picker). */
 .quality-field select {
-  padding: 0.5rem 0.6rem;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  appearance: none;
+  height: 36px;
+  padding: 0 32px 0 10px;
+  border: 0;
+  border-radius: 4px;
+  background: #1e1f22
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23b5bac1'%3E%3Cpath d='M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z'/%3E%3C/svg%3E")
+    no-repeat right 8px center / 18px;
+  color: #f2f3f5;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.quality-field select:hover:not(:disabled) {
+  background-color: #232428;
+}
+
+/* Browsers that can't restyle the open list still show its options dark. */
+.quality-field option {
   background: #1e1f22;
   color: #f2f3f5;
-  font-size: 0.9rem;
-  cursor: pointer;
+}
+
+/* Where the open list can be styled (customizable <select>), it becomes the same
+   popover as the player's quality menu: dark card, blurple pick, no checkmark. */
+@supports (appearance: base-select) {
+  .quality-field select,
+  .quality-field select::picker(select) {
+    appearance: base-select;
+  }
+
+  .quality-field select {
+    display: flex;
+    align-items: center;
+    padding-right: 8px;
+    background-image: none;
+  }
+
+  .quality-field select::picker-icon {
+    content: "";
+    width: 18px;
+    height: 18px;
+    margin-left: auto;
+    background: #b5bac1;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z'/%3E%3C/svg%3E")
+      center / contain no-repeat;
+    transition: rotate 120ms ease;
+  }
+
+  .quality-field select:open::picker-icon {
+    rotate: 180deg;
+  }
+
+  .quality-field select::picker(select) {
+    margin-top: 6px;
+    padding: 6px;
+    border: 0;
+    border-radius: 8px;
+    background: #1e1f22;
+    box-shadow:
+      0 12px 32px rgba(0, 0, 0, 0.5),
+      0 0 0 1px rgba(255, 255, 255, 0.06);
+  }
+
+  .quality-field option {
+    min-block-size: 0;
+    padding: 6px 9px;
+    line-height: 1.3;
+    border-radius: 4px;
+    color: #b5bac1;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .quality-field option + option {
+    margin-top: 2px;
+  }
+
+  .quality-field option::checkmark {
+    display: none;
+  }
+
+  .quality-field option:hover {
+    background: #35373c;
+    color: #f2f3f5;
+  }
+
+  .quality-field option:checked {
+    background: var(--accent);
+    color: #fff;
+  }
+}
+
+.quality-field select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .quality-field select:disabled {
@@ -108,34 +231,27 @@ body.viewer .status {
   cursor: not-allowed;
 }
 
+/* The estimate under the fields, marked like the desktop dialog's. */
 .quality-hint {
-  margin: 0 0 1.25rem;
-  font-size: 0.76rem;
-  color: #949ba4;
-}
-
-.present-tip {
-  margin: 0 0 1rem;
-  padding: 0.6rem 0.7rem;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  font-size: 0.76rem;
-  line-height: 1.5;
-  text-align: left;
+  margin: 0 0 16px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: rgba(88, 101, 242, 0.1);
+  font-size: 13px;
+  line-height: 1.4;
   color: #b5bac1;
 }
 
-.present-tip strong {
-  color: #f2f3f5;
+.quality-hint:empty {
+  display: none;
 }
 
 /* Empty by default; only takes space once a warning is set (e.g. no audio captured). */
 .audio-notice {
   margin: 0;
-  font-size: 0.78rem;
+  font-size: 13px;
   line-height: 1.45;
-  text-align: left;
 }
 
 .audio-notice:empty {
@@ -143,23 +259,42 @@ body.viewer .status {
 }
 
 .audio-notice.is-warning {
-  margin-bottom: 1rem;
-  padding: 0.6rem 0.7rem;
-  border-radius: 8px;
-  border: 1px solid rgba(240, 178, 50, 0.35);
+  margin-bottom: 16px;
+  padding: 8px 10px;
+  border-left: 3px solid #f0b232;
+  border-radius: 4px;
   background: rgba(240, 178, 50, 0.1);
   color: #f0b232;
 }
 
-.btn-lg {
+/* The page's one action: a full-width plain Discord button, red while live. */
+.btn-primary.btn-lg {
   width: 100%;
-  padding: 0.75rem 1.25rem;
-  font-size: 0.95rem;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 4px;
+  box-shadow: none;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background-color 120ms linear;
+}
+
+.btn-primary.btn-lg:hover {
+  transform: none;
+}
+
+.btn-primary.btn-lg:active {
+  transform: translateY(1px);
+}
+
+.btn-primary.btn-lg:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .btn-primary.is-stop {
   background: #da373c;
-  box-shadow: 0 2px 8px rgba(218, 55, 60, 0.35);
+  box-shadow: none;
 }
 
 .btn-primary.is-stop:hover {
@@ -210,7 +345,7 @@ body.viewer .status {
   align-items: center;
   justify-content: center;
   background: #000;
-  border-radius: 12px;
+  border-radius: 8px;
   overflow: hidden;
   line-height: 0; /* avoid a stray gap under the canvas from inline-baseline alignment */
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
@@ -261,8 +396,8 @@ body.viewer .status {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.85rem 0.9rem 0.75rem;
+  gap: 4px;
+  padding: 14px 12px 12px 16px;
   box-sizing: border-box;
   background: linear-gradient(to top, rgba(0, 0, 0, 0.82) 0%, rgba(0, 0, 0, 0.6) 45%, rgba(0, 0, 0, 0) 100%);
   backdrop-filter: blur(2px);
@@ -291,30 +426,29 @@ body.viewer .status {
   pointer-events: auto;
 }
 
-/* Share button doubles as the primary CTA inside the overlay: icon + label, pill shape. */
+/* Share button doubles as the primary CTA inside the overlay: icon + label, on the same
+   8px tile as the controls beside it. */
 .btn-share {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.45rem 0.9rem;
-  border-radius: 999px;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
   border: none;
   background: var(--accent);
   color: white;
   font-weight: 600;
-  font-size: 0.82rem;
+  font-size: 13px;
+  line-height: normal;
   cursor: pointer;
   white-space: nowrap;
-  box-shadow: 0 2px 10px rgba(88, 101, 242, 0.45);
-  transition:
-    background 0.15s ease,
-    transform 0.15s ease;
+  transition: background-color 120ms linear;
 }
 
 .btn-share:hover:not(:disabled) {
   background: var(--accent-hover);
-  transform: translateY(-1px);
 }
 
 .btn-share:disabled {
@@ -327,7 +461,6 @@ body.viewer .status {
    reads as destructive rather than as another way to start sharing. */
 .btn-share.is-stop {
   background: #da373c;
-  box-shadow: 0 2px 10px rgba(218, 55, 60, 0.45);
 }
 
 .btn-share.is-stop:hover:not(:disabled) {
@@ -375,9 +508,36 @@ body.viewer .status {
   max-width: 32ch;
 }
 
+/* "Retomar aqui" / "Voltar a assistir": a plain Discord button (4px corners, no glow),
+   like the desktop app's "Transmitir". The Activity's is a .btn-share, the desktop's a
+   .btn-primary; both read the same here. */
 #resume-btn,
 #rewatch-btn {
-  margin-top: 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  margin-top: 0.7rem;
+  padding: 0 12px;
+  border-radius: 4px;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: normal;
+  transition:
+    background-color 120ms linear,
+    transform 120ms ease;
+}
+
+#resume-btn:hover,
+#rewatch-btn:hover {
+  background: var(--accent-hover);
+  transform: none;
+}
+
+#resume-btn:active,
+#rewatch-btn:active {
+  transform: translateY(1px);
 }
 
 /* Above .controls-zone, which reaches up into a short player and swallowed its clicks. */
@@ -393,8 +553,13 @@ body.viewer .status {
 .status-text {
   flex-shrink: 1;
   min-width: 0;
-  font-size: 0.78rem;
-  color: #dbdee1;
+  margin-left: 4px;
+  /* .player's line-height: 0 (for the canvas) clipped this away under overflow: hidden. */
+  line-height: 1.3;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--player-text);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -414,7 +579,7 @@ body.viewer .status {
      which collapsed each row's name to a zero-height line, clipped away entirely, and
      left only the viewer pill visible. Text needs a real line box. */
   line-height: 1.35;
-  --panel-bg: #111214;
+  --panel-bg: #1e1f22;
   position: absolute;
   /* Anchored to the top, not above the control bar. .controls-zone is 90px tall and
      stacks higher, so anything overlapping it has its clicks swallowed -- which is what
@@ -429,11 +594,11 @@ body.viewer .status {
   width: min(22rem, calc(100% - 1.5rem));
   /* Stops short of the control bar rather than running under it. */
   max-height: calc(100% - 7rem);
-  border-radius: 0.75rem;
+  border-radius: 8px;
   background: var(--panel-bg);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
   color: #f2f3f5;
   overflow: hidden;
 }
@@ -444,16 +609,18 @@ body.viewer .status {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.8rem 0.7rem 0.6rem 1rem;
+  padding: 10px 8px 6px 14px;
 }
 
 .broadcasts-title {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-size: 0.88rem;
+  gap: 8px;
+  color: #80848e;
+  font-size: 11px;
   font-weight: 700;
-  color: #f2f3f5;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 /* How many are live right now, in the live red so it reads as the same signal as the
@@ -479,13 +646,13 @@ body.viewer .status {
    and isn't an obvious way back out. */
 .broadcasts-close {
   flex-shrink: 0;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 50%;
+  border-radius: 4px;
   background: transparent;
   color: rgba(255, 255, 255, 0.55);
   font-size: 1.1rem;
@@ -494,8 +661,8 @@ body.viewer .status {
 }
 
 .broadcasts-close:hover {
-  background: rgba(255, 255, 255, 0.14);
-  color: #fff;
+  background: #35373c;
+  color: #f2f3f5;
 }
 
 #broadcasts-list {
@@ -503,8 +670,8 @@ body.viewer .status {
   min-height: 0;
   overflow-y: auto;
   box-sizing: border-box;
-  padding: 0 0.6rem 0.7rem;
-  font-size: 0.82rem;
+  padding: 0 6px 6px;
+  font-size: 13px;
 }
 
 .broadcasts-empty {
@@ -527,10 +694,10 @@ body.viewer .status {
   column-gap: 0.7rem;
   width: 100%;
   box-sizing: border-box;
-  padding: 0.55rem 0.65rem;
+  padding: 8px 10px;
   margin: 0;
   border: none;
-  border-radius: 0.55rem;
+  border-radius: 4px;
   background: transparent;
   color: inherit;
   font: inherit;
@@ -544,8 +711,8 @@ body.viewer .status {
 }
 
 .broadcast-row:hover {
-  --ring: #1c1d20;
-  background: rgba(255, 255, 255, 0.05);
+  --ring: #35373c;
+  background: #35373c;
 }
 
 .broadcast-row:focus-visible {
@@ -556,7 +723,7 @@ body.viewer .status {
 /* The one being watched: tinted, with an accent bar on the leading edge so it's
    findable at a glance without reading any of the rows. */
 .broadcast-row.is-current {
-  --ring: #1c1f38;
+  --ring: #272a43;
   background: rgba(88, 101, 242, 0.16);
 }
 
@@ -726,94 +893,121 @@ body.viewer .status {
   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.6);
 }
 
-.icon-btn.is-active {
-  background: rgba(88, 101, 242, 0.9);
-  border-color: transparent;
-  color: #fff;
-}
-
+/* Player controls, in the Discord client's language (the desktop app's voice panel):
+   8px tiles, no borders, red when something is switched off. They sit on video of any
+   brightness, so the tiles are a translucent dark rather than a faint white. */
 .icon-btn {
   flex-shrink: 0;
   width: 34px;
-  height: 34px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.1);
+  border: 0;
+  border-radius: 8px;
+  background: var(--player-tile);
   backdrop-filter: blur(6px);
-  color: #f2f3f5;
+  color: var(--player-text);
   cursor: pointer;
   transition:
-    background 0.15s ease,
-    transform 0.15s ease;
+    background-color 120ms linear,
+    color 120ms linear;
+}
+
+.icon-btn svg {
+  width: 19px;
+  height: 19px;
 }
 
 .icon-btn:hover {
-  background: rgba(255, 255, 255, 0.22);
-  transform: translateY(-1px);
+  background: #404249;
+  color: #f2f3f5;
 }
 
 .icon-btn:active {
-  transform: translateY(0);
+  background: #383a40;
 }
 
-/* Destructive action (ending someone else's broadcast): tinted red at rest so it reads
-   as different from the neighbouring playback controls before it's even hovered. */
+.icon-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.icon-btn.is-active {
+  background: rgba(88, 101, 242, 0.3);
+  color: #c9cdfb;
+}
+
+/* Switched off (video, sound): the red tint of a muted mic. */
+.icon-btn.is-off {
+  background: var(--player-off);
+  color: var(--player-red);
+}
+
+/* Ending someone else's broadcast: quiet red until hovered, like hanging up a call. */
 .icon-btn.is-danger {
-  color: #f87171;
-  border-color: rgba(248, 113, 113, 0.35);
-  background: rgba(248, 113, 113, 0.12);
+  color: var(--player-red);
 }
 
 .icon-btn.is-danger:hover {
-  background: rgba(248, 113, 113, 0.28);
+  background: var(--player-red);
   color: #fff;
 }
 
-.icon-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-  transform: none;
-}
-
+.icon-btn:disabled,
 .icon-btn:disabled:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--player-tile);
+  color: var(--player-text);
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
+/* Mute button and slider share one tile, like a mic and its device chevron. */
 .volume-group {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 4px;
   flex-shrink: 0;
-  padding: 0.15rem 0.6rem 0.15rem 0.15rem;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  padding: 0 12px 0 0;
+  border-radius: 8px;
+  background: var(--player-tile);
+  backdrop-filter: blur(6px);
+  transition: background-color 120ms linear;
 }
 
-.volume-group .icon-btn {
+.volume-group:hover {
+  background: rgba(53, 55, 60, 0.85);
+}
+
+.volume-group:has(.is-off) {
+  background: var(--player-off);
+}
+
+.volume-group .icon-btn,
+.volume-group .icon-btn:hover,
+.volume-group .icon-btn.is-off,
+.volume-group .icon-btn:disabled {
   background: transparent;
-  border-color: transparent;
+  backdrop-filter: none;
 }
 
 .volume-group .icon-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
+  color: #f2f3f5;
 }
 
 /* Custom range slider: thin track with a solid fill up to the thumb (via --fill,
-   kept in sync with the input's value from App.ts), circular thumb on hover-grow. */
+   kept in sync with the input's value by the view). */
 .volume-slider {
   appearance: none;
-  width: 80px;
+  width: 88px;
   height: 4px;
   border-radius: 999px;
   background: linear-gradient(
     to right,
     var(--accent) 0%,
     var(--accent) var(--fill, 100%),
-    rgba(255, 255, 255, 0.25) var(--fill, 100%),
-    rgba(255, 255, 255, 0.25) 100%
+    rgba(255, 255, 255, 0.16) var(--fill, 100%),
+    rgba(255, 255, 255, 0.16) 100%
   );
   cursor: pointer;
   outline: none;
@@ -826,11 +1020,11 @@ body.viewer .status {
 
 .volume-slider::-webkit-slider-thumb {
   appearance: none;
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
   cursor: pointer;
   transition: transform 0.1s ease;
 }
@@ -842,7 +1036,7 @@ body.viewer .status {
 .volume-slider::-moz-range-track {
   height: 4px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .volume-slider::-moz-range-progress {
@@ -852,12 +1046,12 @@ body.viewer .status {
 }
 
 .volume-slider::-moz-range-thumb {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
   border: none;
   border-radius: 50%;
   background: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
   cursor: pointer;
 }
 
@@ -879,22 +1073,28 @@ body.viewer .status {
 }
 
 .quality-btn {
-  height: 30px;
+  height: 32px;
   padding: 0 10px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.45);
-  color: #f2f3f5;
+  border: 0;
+  border-radius: 8px;
+  background: var(--player-tile);
+  backdrop-filter: blur(6px);
+  color: var(--player-text);
   font: inherit;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   cursor: pointer;
-  transition: background-color 120ms linear;
+  transition:
+    background-color 120ms linear,
+    color 120ms linear;
 }
 
-.quality-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
+.quality-btn:hover,
+.quality-btn[aria-expanded="true"] {
+  background: #404249;
+  color: #f2f3f5;
 }
 
 .quality-btn:focus-visible {
@@ -905,13 +1105,15 @@ body.viewer .status {
 .quality-pop {
   position: absolute;
   right: 0;
-  bottom: calc(100% + 8px);
+  bottom: calc(100% + 12px);
   z-index: 20;
   min-width: 180px;
   padding: 6px;
   border-radius: 8px;
-  background: #111214;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  background: #1e1f22;
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
 .quality-pop[hidden] {
@@ -942,11 +1144,124 @@ body.viewer .status {
 }
 
 .quality-item:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: #35373c;
   color: #f2f3f5;
 }
 
 .quality-item.is-selected {
   background: var(--accent);
   color: #fff;
+}
+
+/* Keeps the bar up while one of its popovers is open, or moving the pointer onto the
+   popover's far edge would fade the bar -- and the popover with it -- mid-read. */
+.controls-zone:has(.quality-pop:not([hidden]), .viewers-pop:not([hidden])) .overlay-bar {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+/* --- Who is in the room (ui/viewersMenu.ts) --- */
+.viewers-menu {
+  position: relative;
+  flex-shrink: 0;
+  line-height: normal; /* the player sets line-height: 0 */
+}
+
+.viewers-pop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 12px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  width: 260px;
+  max-height: min(340px, 60vh);
+  padding: 6px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: #1e1f22;
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+  color: #f2f3f5;
+}
+
+.viewers-pop[hidden] {
+  display: none;
+}
+
+.viewers-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 8px;
+  color: #80848e;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.viewers-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.viewers-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.viewers-empty {
+  padding: 6px 8px 8px;
+  color: #949ba4;
+  font-size: 13px;
+}
+
+.viewer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+
+.viewer-row:hover {
+  background: #35373c;
+}
+
+.viewer-avatar {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--avatar, #5865f2);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.viewer-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.viewer-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.viewer-detail {
+  color: #949ba4;
+  font-size: 12px;
 }

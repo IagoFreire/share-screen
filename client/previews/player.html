@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8" /><title>Prévia do player</title></head>
+<body class="viewer">
+<div id="app" style="display:flex;flex-direction:column;gap:12px"></div>
+<script type="module">
+// Temporary preview with fake data: real CSS and the real viewer list component.
+import "/src/ui/app.css";
+import * as I from "/src/ui/icons.ts";
+import { createViewersMenu } from "/src/ui/viewersMenu.ts";
+
+const bar = (id) => `
+  <div class="controls-zone"><div class="overlay-bar">
+    <button class="btn-share">${I.ICON_SHARE}<span>Compartilhar tela</span></button>
+    <span class="status-text" id="${id}">3 espectador(es).</span>
+    <div class="spacer"></div>
+    <div class="quality-menu"><button class="quality-btn">Auto · 1080p</button></div>
+    <button class="icon-btn" title="Atualizar: voltar ao ao vivo">${I.ICON_REFRESH}</button>
+    <button class="icon-btn" title="Desativar vídeo (somente áudio)" data-toggle-video>${I.ICON_VIDEO}</button>
+    <div class="volume-group">
+      <button class="icon-btn" title="Mudo" data-mute>${I.ICON_VOLUME}</button>
+      <input class="volume-slider" type="range" min="0" max="100" value="100" style="--fill:100%" />
+    </div>
+    <button class="icon-btn" title="Baixar o app para Windows">${I.ICON_DOWNLOAD}</button>
+    <button class="icon-btn" title="Assistir numa aba do navegador">${I.ICON_OPEN_EXTERNAL}</button>
+    <button class="icon-btn" title="Tela cheia">${I.ICON_FULLSCREEN_ENTER}</button>
+  </div></div>`;
+
+document.querySelector("#app").innerHTML = `
+  <p class="status" style="margin:0">Passe o mouse na parte de baixo do player para ver a barra. Dados de exemplo.</p>
+  <div class="player" style="flex:1;background:linear-gradient(135deg,#3a6186,#89253e)">${bar("st-live")}</div>
+  <div class="player" style="flex:1">
+    <div class="idle-screen">
+      <div class="idle-icon">${I.ICON_IDLE}</div>
+      <p class="idle-title">Pausado para economizar banda</p>
+      <p class="idle-subtitle">Você está conectado em outra aba.</p>
+      <button id="resume-btn" class="btn-share" type="button">Retomar aqui</button>
+    </div>
+    ${bar("st-paused")}
+  </div>`;
+
+const people = [
+  { userId: "1001", name: "Iago", slot: 0 },
+  { userId: "1002", name: "Beatriz", slot: 0 },
+  { userId: "1003", name: "Caio", slot: null },
+  { userId: "1009", name: "Zé da Live", slot: null },
+];
+for (const id of ["st-live", "st-paused"]) {
+  let menu;
+  menu = createViewersMenu({
+    requestList: () => setTimeout(() => menu.show(people), 150),
+    context: () => ({ streams: [{ slot: 0, presenterId: "1009", audio: null }], selectedSlot: 0, userId: "1001" }),
+  });
+  document.getElementById(id).after(menu.element);
+}
+
+// Toggles so the on/off looks can be tried.
+for (const button of document.querySelectorAll("[data-toggle-video]")) {
+  button.addEventListener("click", () => {
+    const off = button.classList.toggle("is-off");
+    button.innerHTML = off ? I.ICON_VIDEO_OFF : I.ICON_VIDEO;
+  });
+}
+for (const group of document.querySelectorAll(".volume-group")) {
+  const mute = group.querySelector("[data-mute]");
+  const slider = group.querySelector("input");
+  const sync = () => {
+    const muted = Number(slider.value) === 0;
+    slider.style.setProperty("--fill", `${slider.value}%`);
+    mute.innerHTML = muted ? I.ICON_MUTED : I.ICON_VOLUME;
+    mute.classList.toggle("is-off", muted);
+  };
+  slider.addEventListener("input", sync);
+  mute.addEventListener("click", () => {
+    slider.value = Number(slider.value) === 0 ? "100" : "0";
+    sync();
+  });
+}
+</script>
+</body>
+</html>

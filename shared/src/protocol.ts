@@ -138,6 +138,19 @@ export interface ActiveBroadcast {
   viewerCount: number;
 }
 
+/**
+ * One person in a room, for the viewer list. A user's several connections (the
+ * Activity plus a browser tab, the desktop app's player plus its capture side) are one
+ * entry. `name` is resolved like ActiveBroadcast's and null when that isn't possible;
+ * `userId` is null for a connection that never said who it is.
+ */
+export interface RoomViewer {
+  userId: string | null;
+  name: string | null;
+  /** The broadcast they receive; null when they watch none. */
+  slot: number | null;
+}
+
 /** The Discord account a desktop-app session belongs to, as the app displays it. */
 export interface DesktopUser {
   id: string;
@@ -245,6 +258,10 @@ export type ControlMessage =
   | { kind: "request-active-broadcasts" }
   | { kind: "active-broadcasts"; broadcasts: ActiveBroadcast[] }
   | { kind: "viewer-count"; count: number }
+  /** Who is in this room (the viewer list). Polled while the list is open, like the
+   *  broadcast list, rather than pushed on every join and leave. */
+  | { kind: "request-viewers" }
+  | { kind: "viewers"; viewers: RoomViewer[] }
   /**
    * Server -> presenter: how many other people receive this broadcast (`watchers`), and
    * how many viewers want its picture (`videoWatchers`, which also counts the presenter's

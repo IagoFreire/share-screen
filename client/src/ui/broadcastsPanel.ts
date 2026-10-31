@@ -154,12 +154,12 @@ export function syncBroadcastsButton(
 }
 
 /** Short, stable stand-in when a snowflake has no resolved name (see discordNames.ts). */
-function shortId(id: string): string {
+export function shortId(id: string): string {
   return `…${id.slice(-4)}`;
 }
 
 /** Same presenter, same colour, on every refresh and in every room. */
-function avatarColor(id: string | null): string {
+export function avatarColor(id: string | null): string {
   if (!id) return AVATAR_COLORS[AVATAR_COLORS.length - 1]!;
   let hash = 0;
   for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;

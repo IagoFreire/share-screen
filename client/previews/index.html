@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prévias</title>
+  <style>
+    .previews {
+      max-width: 460px;
+      margin: 6vh auto 0;
+    }
+    .previews h1 {
+      margin: 0 0 4px;
+      font-size: 18px;
+    }
+    .previews p {
+      margin: 0 0 20px;
+      color: #b5bac1;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    .previews a {
+      display: block;
+      margin-bottom: 8px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #2b2d31;
+      color: #f2f3f5;
+      font-weight: 600;
+      text-decoration: none;
+      transition: background-color 120ms linear;
+    }
+    .previews a:hover {
+      background: #35373c;
+    }
+    .previews small {
+      display: block;
+      margin-top: 2px;
+      color: #949ba4;
+      font-weight: 400;
+    }
+  </style>
+</head>
+<body>
+  <main class="previews">
+    <h1>Prévias da interface</h1>
+    <p>CSS e componentes reais com dados de exemplo. Nada aqui se conecta ao servidor.</p>
+    <a href="./player.html">Player da Atividade<small>Barra de controles, lista "Na sala" e o estado pausado</small></a>
+    <a href="./watch.html">Assistir pelo navegador<small>watch.html com a lista de transmissões aberta</small></a>
+    <a href="./present.html">Compartilhar sua tela<small>present.html (cópia estática da marcação de src/present.ts)</small></a>
+  </main>
+  <script type="module">
+    import "/src/ui/app.css";
+  </script>
+</body>
+</html>

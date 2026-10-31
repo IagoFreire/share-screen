@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8" /><title>Prévia: assistir no navegador</title></head>
+<body class="viewer">
+<div id="app"></div>
+<script type="module">
+// Temporary preview of watch.html with fake data: real CSS, broadcast list and viewer list.
+import "/src/ui/app.css";
+import * as I from "/src/ui/icons.ts";
+import { BROADCASTS_PANEL_HTML, createBroadcastsPanel } from "/src/ui/broadcastsPanel.ts";
+import { createViewersMenu } from "/src/ui/viewersMenu.ts";
+
+document.querySelector("#app").innerHTML = `
+  <div class="player" id="player" style="background:linear-gradient(135deg,#3a6186,#89253e)">
+    ${BROADCASTS_PANEL_HTML}
+    <div class="controls-zone"><div class="overlay-bar">
+      <span class="status-text" id="st">2 transmissões — 5 espectador(es).</span>
+      <div class="spacer"></div>
+      <div class="quality-menu"><button class="quality-btn">Auto · 1080p</button></div>
+      <button class="icon-btn" title="Atualizar: voltar ao ao vivo">${I.ICON_REFRESH}</button>
+      <button id="broadcasts-btn" class="icon-btn" title="Escolher transmissão" data-count="2">${I.ICON_LIST}</button>
+      <button class="icon-btn" title="Desativar vídeo (somente áudio)">${I.ICON_VIDEO}</button>
+      <div class="volume-group">
+        <button class="icon-btn" title="Mudo">${I.ICON_VOLUME}</button>
+        <input class="volume-slider" type="range" min="0" max="200" value="100" style="--fill:50%" />
+      </div>
+      <button class="icon-btn" title="Tela cheia">${I.ICON_FULLSCREEN_ENTER}</button>
+    </div></div>
+  </div>`;
+
+const broadcasts = [
+  { roomId: "r1", guildId: "g", guildName: "Amigos", channelName: "Geral", slot: 0, presenterId: "1009", presenterName: "Zé da Live", viewerCount: 5 },
+  { roomId: "r1", guildId: "g", guildName: "Amigos", channelName: "Geral", slot: 1, presenterId: "1010", presenterName: "Marina", viewerCount: 5 },
+];
+let panel;
+panel = createBroadcastsPanel({
+  panel: document.querySelector("#broadcasts-panel"),
+  context: () => ({ roomId: "r1", selectedSlot: 0, isAdmin: false, userId: "1001" }),
+  requestList: () => setTimeout(() => panel.show(broadcasts), 100),
+  onPick: () => {},
+  onOpenChange: () => document.querySelector("#broadcasts-btn").classList.toggle("is-active", panel.isOpen),
+});
+document.querySelector("#broadcasts-btn").addEventListener("click", () => panel.toggle());
+panel.toggle();
+
+let menu;
+menu = createViewersMenu({
+  requestList: () => setTimeout(() => menu.show([
+    { userId: "1009", name: "Zé da Live", slot: 0 },
+    { userId: "1010", name: "Marina", slot: 1 },
+    { userId: "1001", name: "Iago", slot: 0 },
+    { userId: "1002", name: "Beatriz", slot: 1 },
+  ]), 100),
+  context: () => ({ streams: [{ slot: 0, presenterId: "1009", audio: null }, { slot: 1, presenterId: "1010", audio: null }], selectedSlot: 0, userId: "1001" }),
+});
+document.querySelector("#st").after(menu.element);
+</script>
+</body>
+</html>

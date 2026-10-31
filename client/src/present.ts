@@ -98,12 +98,6 @@ function main(): void {
       </div>
 
       <p class="quality-hint" id="quality-hint"></p>
-      <p class="present-tip">
-        <strong>Áudio:</strong> marque “compartilhar áudio” no seletor. Prefira compartilhar
-        <strong>uma aba</strong> do navegador — ela envia só o áudio daquela aba. Compartilhar a
-        tela inteira captura o áudio do sistema, o que inclui o próprio Discord e faz os outros
-        se ouvirem de volta.
-      </p>
       <p class="audio-notice" id="audio-notice"></p>
       <button id="share-btn" class="btn-primary btn-lg" type="button">Compartilhar tela</button>
     </div>
