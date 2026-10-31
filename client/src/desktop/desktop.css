@@ -536,8 +536,17 @@ body.desktop :focus-visible {
   font-size: 14px;
 }
 
+/* The header's badge matches "Sair da live" beside it: same height, corners and type
+   size (the sidebar keeps the small .desk-live). */
 .desk-main-live {
-  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  margin: 8px 0 8px auto;
+  padding: 0 10px;
+  box-sizing: border-box;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 /* "Sair da live": quiet until hovered, then the same red as leaving a call. */
@@ -547,6 +556,7 @@ body.desktop :focus-visible {
   align-items: center;
   gap: 6px;
   height: 28px;
+  margin: 8px 0;
   padding: 0 10px;
   border: 0;
   border-radius: 4px;
@@ -567,6 +577,8 @@ body.desktop :focus-visible {
   background: var(--desk-red-hover);
 }
 
+/* The icon's 20px .desk-icon box would leave the 16px svg off-centre. */
+.desk-leave .desk-icon,
 .desk-leave svg {
   width: 16px;
   height: 16px;
