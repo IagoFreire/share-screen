@@ -9,6 +9,7 @@ import {
   type VoiceServerMessage,
 } from "@screenshare-bot/shared";
 import { startMicCapture, type MicCapture } from "./micCapture.js";
+import { playOutputTest, startMicTest, type MicTest } from "./micTest.js";
 import { startVoicePlayback, type VoicePlayback } from "./voicePlayback.js";
 import {
   saveDevice,
@@ -17,12 +18,22 @@ import {
   saveNoiseSuppression,
   type DeviceKind,
 } from "./voiceDevices.js";
+import {
+  clampSensitivity,
+  clampVolume,
+  saveInputGain,
+  savedInputGain,
+  savedSensitivity,
+  saveSensitivity,
+  savedUserVolume,
+  saveUserVolume,
+} from "./voicePrefs.js";
 
 /**
  * The desktop app's voice rooms (shared/src/voice.ts) as one observable object: the
  * /voice socket, the room list, and -- while in a room -- the microphone and the mix of
  * everyone else. The UI renders from state() and calls the actions; levels are read
- * every frame for the speaking rings.
+ * every frame for the speaking rings and the sensitivity meter.
  */
 
 export interface VoiceState {
@@ -37,6 +48,14 @@ export interface VoiceState {
   /** RNNoise wanted by the user; `noiseActive` says whether it is really running. */
   noiseSuppression: boolean;
   noiseActive: boolean;
+  /** The microphone's gain, 0 to 2. */
+  inputGain: number;
+  /** Quieter than this many dB isn't sent. */
+  sensitivityDb: number;
+  /** "Testar microfone": the user hearing themselves as the room would. */
+  micTest: "off" | "starting" | "on";
+  /** "Testar saída" is playing its chime. */
+  outputTest: boolean;
   /** The microphone couldn't be opened (denied, none plugged in). */
   micError: string | null;
   /** Last thing the server refused, for the UI to show once. */
@@ -53,8 +72,17 @@ export interface VoiceSession {
   toggleDeafen(): void;
   setNoiseSuppression(on: boolean): void;
   setDevice(kind: DeviceKind, deviceId: string): void;
-  /** Loudness 0-1 of a seat in the current room; the user's own seat reads the microphone. */
+  setInputGain(gain: number): void;
+  setSensitivity(db: number): void;
+  /** How loud someone plays for this user, 0 to 2, remembered per person. */
+  userVolume(userId: string): number;
+  setUserVolume(userId: string, volume: number): void;
+  toggleMicTest(): void;
+  testOutput(): void;
+  /** Loudness 0-1 of a seat in the current room; the user's own seat reads 1 while it transmits. */
   levelOf(slot: number): number;
+  /** Loudness 0-1 of the microphone, sent or not -- the test's, else the room's: the sensitivity meter. */
+  inputLevel(): number;
   close(): void;
 }
 
@@ -67,6 +95,7 @@ export interface VoiceSessionOptions {
 }
 
 const RECONNECT_DELAY_MS = 1500;
+const MIC_FAILED = "Não foi possível abrir o microfone.";
 
 export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
   let state: VoiceState = {
@@ -79,6 +108,10 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
     deafened: false,
     noiseSuppression: savedNoiseSuppression(),
     noiseActive: false,
+    inputGain: savedInputGain(),
+    sensitivityDb: savedSensitivity(),
+    micTest: "off",
+    outputTest: false,
     micError: null,
     error: null,
   };
@@ -90,6 +123,9 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
   let mic: MicCapture | null = null;
   let micStarting = false;
   let playback: VoicePlayback | null = null;
+  let test: MicTest | null = null;
+  /** Bumped on every test start and stop, so a test that finishes opening late knows it's stale. */
+  let testRun = 0;
   let packetClock = 0;
   /** Mute as the user left it, restored when they undeafen (deafening mutes, as in Discord). */
   let mutedBeforeDeafen = false;
@@ -122,6 +158,8 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
       const started = await startMicCapture({
         deviceId: savedDevice("input"),
         noiseSuppression: state.noiseSuppression,
+        gain: state.inputGain,
+        sensitivityDb: state.sensitivityDb,
         onPacket: sendPacket,
       });
       micStarting = false;
@@ -135,7 +173,7 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
     } catch (error) {
       micStarting = false;
       console.error("Failed to open the microphone:", error);
-      update({ micError: "Não foi possível abrir o microfone." });
+      update({ micError: MIC_FAILED });
     }
   }
 
@@ -150,12 +188,61 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
     void startMic();
   }
 
+  async function startTest(): Promise<void> {
+    const run = ++testRun;
+    update({ micTest: "starting", micError: null });
+    try {
+      const started = await startMicTest({
+        deviceId: savedDevice("input"),
+        outputDeviceId: savedDevice("output"),
+        noiseSuppression: state.noiseSuppression,
+        gain: state.inputGain,
+        sensitivityDb: state.sensitivityDb,
+      });
+      if (run !== testRun || closed) {
+        started.stop(); // stopped while the microphone was opening
+        return;
+      }
+      test = started;
+      update({ micTest: "on" });
+    } catch (error) {
+      if (run !== testRun) return;
+      console.error("Failed to start the microphone test:", error);
+      update({ micTest: "off", micError: MIC_FAILED });
+    }
+  }
+
+  function stopTest(): void {
+    testRun += 1;
+    test?.stop();
+    test = null;
+    if (state.micTest !== "off") update({ micTest: "off" });
+  }
+
+  /** Device and RNNoise changes reopen the microphone; a running test follows them. */
+  function restartTest(): void {
+    if (state.micTest === "off") return;
+    stopTest();
+    void startTest();
+  }
+
+  /** Everyone else in the room at the volume this user set for them. */
+  function applyVolumes(room: VoiceRoomInfo): void {
+    if (!playback) return;
+    playback.keepOnly(room.members.map((member) => member.slot));
+    for (const member of room.members) {
+      if (member.slot !== state.slot) playback.setVolume(member.slot, savedUserVolume(member.userId));
+    }
+  }
+
   function enterRoom(): void {
     if (!playback) {
       playback = startVoicePlayback();
       playback.setDeafened(state.deafened);
       void playback.setOutputDevice(savedDevice("output")).catch((error) => console.error("Output device:", error));
     }
+    const here = state.rooms.find((room) => room.id === state.roomId);
+    if (here) applyVolumes(here);
     void startMic();
   }
 
@@ -173,7 +260,7 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
       case "rooms": {
         update({ rooms: message.rooms });
         const here = message.rooms.find((room) => room.id === state.roomId);
-        if (here) playback?.keepOnly(here.members.map((member) => member.slot));
+        if (here) applyVolumes(here);
         if (rejoinRoomId) {
           const target = rejoinRoomId;
           rejoinRoomId = null;
@@ -234,6 +321,7 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
 
   function close(): void {
     closed = true;
+    stopTest();
     exitRoom();
     socket?.close();
     socket = null;
@@ -279,17 +367,52 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
       saveNoiseSuppression(on);
       update({ noiseSuppression: on });
       restartMic();
+      restartTest();
     },
     setDevice(kind, deviceId) {
       saveDevice(kind, deviceId);
       if (kind === "input") restartMic();
       else void playback?.setOutputDevice(deviceId).catch((error) => console.error("Output device:", error));
+      restartTest();
       update({});
     },
+    setInputGain(gain) {
+      const value = clampVolume(gain);
+      saveInputGain(value);
+      mic?.setGain(value);
+      test?.setGain(value);
+      update({ inputGain: value });
+    },
+    setSensitivity(db) {
+      const value = clampSensitivity(db);
+      saveSensitivity(value);
+      mic?.setSensitivity(value);
+      test?.setSensitivity(value);
+      update({ sensitivityDb: value });
+    },
+    userVolume: (userId) => savedUserVolume(userId),
+    setUserVolume(userId, volume) {
+      const value = clampVolume(volume);
+      saveUserVolume(userId, value);
+      const member = state.rooms.find((room) => room.id === state.roomId)?.members.find((candidate) => candidate.userId === userId);
+      if (member) playback?.setVolume(member.slot, value);
+    },
+    toggleMicTest() {
+      if (state.micTest === "off") void startTest();
+      else stopTest();
+    },
+    testOutput() {
+      if (state.outputTest) return;
+      update({ outputTest: true });
+      playOutputTest(savedDevice("output"))
+        .catch((error) => console.error("Output test failed:", error))
+        .finally(() => update({ outputTest: false }));
+    },
     levelOf(slot) {
-      if (slot === state.slot) return mic && !state.muted && !state.deafened ? mic.level() : 0;
+      if (slot === state.slot) return mic?.transmitting() ? 1 : 0;
       return playback?.levelOf(slot) ?? 0;
     },
+    inputLevel: () => test?.inputLevel() ?? mic?.inputLevel() ?? 0,
     close,
   };
 }

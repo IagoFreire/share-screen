@@ -1,0 +1,401 @@
+/* The voice dock's settings panels and the "Volume do usuário" menu (voiceSettings.ts,
+   voiceControls.ts, voiceUserMenu.ts), drawn with the app's own controls instead of
+   the system's. */
+
+/* --- The panel, opening above the dock --- */
+.vc-popover {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: calc(100vh - 260px);
+  overflow-y: auto;
+  padding: 14px 12px;
+  border-radius: 8px;
+  background: var(--desk-bg-deep);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  animation: vc-rise var(--desk-normal) var(--desk-ease) both;
+}
+
+.vc-pop-label {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--desk-text-dim);
+}
+
+.vc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.vc-field .vc-hint {
+  margin-top: 0;
+}
+
+.vc-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.vc-field-value {
+  color: var(--desk-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Device picker: the list unfolds in place, so the panel just grows upward --- */
+.vc-picker-btn {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 6px 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  background: var(--desk-bg-sidebar);
+  color: var(--desk-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--desk-fast) linear;
+}
+
+.vc-picker-btn:hover {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.vc-picker.is-open .vc-picker-btn {
+  border-color: var(--desk-blurple);
+  border-radius: 4px 4px 0 0;
+}
+
+.vc-picker-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vc-picker-chevron {
+  display: inline-flex;
+  color: var(--desk-text-dim);
+  transition: transform var(--desk-fast) var(--desk-ease);
+}
+
+.vc-picker-chevron svg {
+  width: 18px;
+  height: 18px;
+}
+
+.vc-picker.is-open .vc-picker-chevron {
+  transform: rotate(180deg);
+}
+
+.vc-picker-list {
+  max-height: 196px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--desk-blurple);
+  border-top: 0;
+  border-radius: 0 0 4px 4px;
+  background: var(--desk-bg-sidebar);
+}
+
+.vc-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 3px;
+  color: var(--desk-text-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.vc-picker-option:hover,
+.vc-picker-option:focus {
+  background: var(--desk-bg-hover);
+  color: var(--desk-text);
+}
+
+/* Keyboard focus, drawn inside the row so the list's edge doesn't clip it. */
+body.desktop .vc-picker-option:focus-visible {
+  outline-offset: -2px;
+}
+
+.vc-picker-option.is-selected {
+  color: var(--desk-text);
+}
+
+.vc-picker-option-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vc-picker-check {
+  display: inline-flex;
+  color: var(--desk-blurple);
+}
+
+.vc-picker-check svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* --- 0-200% slider, with a notch at 100% --- */
+.vc-range {
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.vc-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 3px;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0.45)) 50% 50% / 2px 100% no-repeat,
+    linear-gradient(90deg, var(--desk-blurple) var(--fill, 50%), var(--desk-bg-active) var(--fill, 50%));
+}
+
+.vc-range::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: transform var(--desk-fast) var(--desk-ease);
+  -webkit-appearance: none;
+}
+
+.vc-range:hover::-webkit-slider-thumb,
+.vc-range:active::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+/* --- Sensitivity: the live level runs along the bar, amber below the mark, green past it --- */
+.vc-sense {
+  --mark: 0.375;
+  position: relative;
+  height: 20px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: linear-gradient(
+    90deg,
+    rgba(240, 178, 50, 0.16) 0 calc(var(--mark) * 100%),
+    rgba(35, 165, 90, 0.16) calc(var(--mark) * 100%) 100%
+  );
+}
+
+.vc-sense:focus-within {
+  box-shadow: 0 0 0 2px var(--desk-blurple);
+}
+
+.vc-sense-fill {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, #f0b232 0 calc(var(--mark) * 100%), var(--desk-green) calc(var(--mark) * 100%) 100%);
+  clip-path: inset(0 calc((1 - var(--level, 0)) * 100%) 0 0);
+}
+
+.vc-sense-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background: transparent;
+  cursor: ew-resize;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.vc-sense-range:focus-visible {
+  outline: none;
+}
+
+.vc-sense-range::-webkit-slider-runnable-track {
+  height: 100%;
+  background: transparent;
+}
+
+.vc-sense-range::-webkit-slider-thumb {
+  width: 6px;
+  height: 20px;
+  border-radius: 3px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 1px 4px rgba(0, 0, 0, 0.4);
+  -webkit-appearance: none;
+}
+
+/* --- RNNoise switch --- */
+.vc-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vc-toggle-row > span {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.vc-toggle-row strong {
+  font-size: 13px;
+}
+
+.vc-toggle-row small {
+  font-size: 11px;
+  color: var(--desk-text-dim);
+}
+
+.vc-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--desk-bg-active);
+  cursor: pointer;
+  transition: background-color var(--desk-fast) linear;
+}
+
+.vc-switch.is-on {
+  background: var(--desk-green);
+}
+
+.vc-switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform var(--desk-fast) var(--desk-ease);
+}
+
+.vc-switch.is-on .vc-switch-knob {
+  transform: translateX(16px);
+}
+
+/* --- "Testar microfone" / "Testar saída" --- */
+.vc-test-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vc-test-row .vc-hint {
+  margin-top: 0;
+}
+
+.vc-test {
+  align-self: flex-start;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--desk-blurple);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--desk-fast) linear;
+}
+
+.vc-test:hover:not(:disabled) {
+  background: var(--desk-blurple-hover);
+}
+
+.vc-test.is-on {
+  background: var(--desk-red);
+}
+
+.vc-test.is-on:hover:not(:disabled) {
+  background: var(--desk-red-hover);
+}
+
+.vc-test:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* --- "Volume do usuário", beside the sidebar --- */
+.vc-usermenu {
+  position: fixed;
+  z-index: 50;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 224px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--desk-bg-deep);
+  color: var(--desk-text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  animation: vc-slide var(--desk-fast) var(--desk-ease) both;
+}
+
+.vc-usermenu .vc-hint {
+  margin-top: -4px;
+}
+
+.vc-usermenu-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.vc-usermenu-head .vc-avatar {
+  width: 32px;
+  height: 32px;
+  font-size: 13px;
+}
+
+.vc-usermenu-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+@keyframes vc-slide {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vc-usermenu {
+    animation: none;
+  }
+}

@@ -1,15 +1,22 @@
 import "./voice.css";
+import "./voicePanel.css";
 import type { VoiceMember, VoiceRoomInfo } from "@screenshare-bot/shared";
 import { avatar, h, icon } from "../dom.js";
-import { chooseDevice, listAudioDevices, savedDevice, type AudioDevice, type DeviceKind } from "../../voice/voiceDevices.js";
+import { listAudioDevices, type AudioDevice, type DeviceKind } from "../../voice/voiceDevices.js";
+import { SPEAKING_LEVEL } from "../../voice/voiceLevel.js";
 import type { VoiceSession } from "../../voice/voiceSession.js";
+import { devicePanel, devicePanelKey } from "./voiceSettings.js";
+import { openUserVolumeMenu } from "./voiceUserMenu.js";
 
 /**
  * The voice rooms in the desktop window: the "Salas de voz" section of the sidebar and
- * the voice dock above the user panel (microphone, headphones, devices, RNNoise). Both
- * redraw from the session's state; who is talking is painted every frame instead, as a
- * CSS variable on each avatar, so speaking never rebuilds the DOM.
+ * the voice dock above the user panel (microphone, headphones, their settings panels).
+ * Both redraw from the session's state; who is talking, and the sensitivity meter, are
+ * painted every frame instead, so speaking never rebuilds the DOM.
  */
+
+/** How fast a speaking ring lets go: it fades over a few frames instead of flickering between syllables. */
+const RING_FADE_PER_FRAME = 0.03;
 
 const ICONS = {
   mic: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>`,
@@ -43,6 +50,8 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
   let shownPanel = "";
   let devices: Record<DeviceKind, AudioDevice[]> = { input: [], output: [] };
   let frame = 0;
+  /** Closes the open "Volume do usuário" menu, if any. */
+  let closeUserMenu: (() => void) | null = null;
 
   // The name field and the device panel outlive the redraws around them: someone joining
   // a room elsewhere must not steal the focus or close a device list mid-pick.
@@ -103,25 +112,33 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
     renderRooms();
   }
 
-  function memberRow(member: VoiceMember): HTMLElement {
-    return h(
-      "div",
-      { class: `vc-member${member.muted ? " is-muted" : ""}`, "data-level-slot": String(member.slot) },
-      h("span", { class: "vc-ring" }, avatar(member.name, member.avatarUrl, member.userId, "vc-avatar")),
+  function memberRow(member: VoiceMember, here: boolean): HTMLElement {
+    const content = [
+      avatar(member.name, member.avatarUrl, member.userId, "vc-avatar"),
       h("span", { class: "vc-member-name" }, member.name),
-      member.deafened
-        ? icon(ICONS.headsetOff, "vc-flag")
-        : member.muted
-          ? icon(ICONS.micOff, "vc-flag")
-          : null,
+      member.deafened ? icon(ICONS.headsetOff, "vc-flag") : member.muted ? icon(ICONS.micOff, "vc-flag") : null,
+    ];
+    // Seats are numbered per room, and only the room you're in is heard: other rooms
+    // get no speaking ring rather than someone else's.
+    const levelSlot = here ? String(member.slot) : undefined;
+    if (member.userId === session.state().userId) {
+      return h("div", { class: "vc-member", "data-level-slot": levelSlot }, ...content);
+    }
+    const row = h(
+      "button",
+      { class: "vc-member is-other", type: "button", title: `Volume de ${member.name}`, "data-level-slot": levelSlot },
+      ...content,
     );
+    row.addEventListener("click", () => {
+      closeUserMenu?.();
+      closeUserMenu = openUserVolumeMenu(row, member, session, () => {
+        closeUserMenu = null;
+      });
+    });
+    return row;
   }
 
-  function roomCard(room: VoiceRoomInfo, here: boolean): HTMLElement {
-    const faces = room.members
-      .slice(0, 5)
-      .map((member) => avatar(member.name, member.avatarUrl, member.userId, "vc-face"));
-    const extra = room.members.length - faces.length;
+  function roomRow(room: VoiceRoomInfo, here: boolean): HTMLElement {
     return h(
       "div",
       { class: `vc-room${here ? " is-here" : ""}` },
@@ -131,91 +148,35 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
           class: "vc-room-head",
           type: "button",
           title: here ? "Você está nesta sala" : `Entrar em ${room.name}`,
-          disabled: here,
-          onClick: () => session.joinRoom(room.id),
+          "aria-current": here ? "true" : undefined,
+          onClick: () => {
+            if (!here) session.joinRoom(room.id);
+          },
         },
         icon(ICONS.speaker, "vc-room-icon"),
         h("span", { class: "vc-room-name" }, room.name),
-        h("span", { class: "vc-room-count" }, String(room.members.length)),
       ),
-      here
-        ? h("div", { class: "vc-members" }, ...room.members.map(memberRow))
-        : h("div", { class: "vc-faces" }, ...faces, extra > 0 ? h("span", { class: "vc-face is-more" }, `+${extra}`) : null),
+      room.members.length > 0
+        ? h("div", { class: "vc-members" }, ...room.members.map((member) => memberRow(member, here)))
+        : null,
     );
   }
 
   function renderRooms(): void {
     const state = session.state();
-    const rooms = [...state.rooms].sort((a, b) => Number(b.id === state.roomId) - Number(a.id === state.roomId));
+    // In the server's order, like Discord's channels: joining one doesn't move it.
     fill(
       roomList,
-      ...rooms.map((room) => roomCard(room, room.id === state.roomId)),
+      ...state.rooms.map((room) => roomRow(room, room.id === state.roomId)),
       state.connected ? null : h("p", { class: "vc-empty" }, "Conectando à voz…"),
       state.error ? h("p", { class: "vc-error", role: "alert" }, state.error) : null,
     );
   }
 
-  function deviceSelect(kind: DeviceKind): HTMLElement {
-    const list = devices[kind];
-    const current = chooseDevice(list, savedDevice(kind));
-    const select = h(
-      "select",
-      { class: "vc-select", "aria-label": kind === "input" ? "Dispositivo de entrada" : "Dispositivo de saída" },
-      ...list.map((device) => {
-        const option = h("option", { value: device.deviceId }, device.label);
-        option.selected = device.deviceId === current;
-        return option;
-      }),
-    );
-    select.addEventListener("change", () => session.setDevice(kind, select.value));
-    return select;
-  }
-
-  function noiseSwitch(): HTMLElement {
-    const on = session.state().noiseSuppression;
-    return h(
-      "button",
-      {
-        class: `vc-switch${on ? " is-on" : ""}`,
-        type: "button",
-        role: "switch",
-        "aria-checked": on ? "true" : "false",
-        "aria-label": "Cancelamento de ruído",
-        onClick: () => session.setNoiseSuppression(!on),
-      },
-      h("span", { class: "vc-switch-knob" }),
-    );
-  }
-
-  function devicePanel(kind: DeviceKind): HTMLElement {
-    const state = session.state();
-    const input = kind === "input";
-    return h(
-      "div",
-      { class: "vc-popover", role: "dialog", "aria-label": input ? "Entrada de áudio" : "Saída de áudio" },
-      h("p", { class: "vc-pop-label" }, input ? "Dispositivo de entrada" : "Dispositivo de saída"),
-      deviceSelect(kind),
-      input
-        ? h(
-            "div",
-            { class: "vc-meter", "data-level-slot": state.slot === null ? "" : String(state.slot), title: "Nível do seu microfone" },
-            h("span", { class: "vc-meter-fill" }),
-          )
-        : null,
-      input && state.roomId === null ? h("small", { class: "vc-hint" }, "O medidor acende quando você entra numa sala.") : null,
-      input
-        ? h(
-            "div",
-            { class: "vc-toggle-row" },
-            h("span", {}, h("strong", {}, "Cancelamento de ruído"), h("small", {}, "RNNoise, open source, roda no seu PC")),
-            noiseSwitch(),
-          )
-        : null,
-    );
-  }
-
-  function togglePopover(kind: DeviceKind): void {
-    popover = popover === kind ? null : kind;
+  function setPopover(next: DeviceKind | null): void {
+    // The mic test belongs to the microphone's panel: closing that ends it, as in Discord.
+    if (popover === "input" && next !== "input" && session.state().micTest !== "off") session.toggleMicTest();
+    popover = next;
     render();
     if (popover) {
       void listAudioDevices()
@@ -241,7 +202,7 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
           title: options,
           "aria-label": options,
           "aria-expanded": popover === kind ? "true" : "false",
-          onClick: () => togglePopover(kind),
+          onClick: () => setPopover(popover === kind ? null : kind),
         },
         icon(ICONS.chevron),
       ),
@@ -252,10 +213,10 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
     const state = session.state();
     const room = state.rooms.find((candidate) => candidate.id === state.roomId);
     const micOff = state.muted || state.deafened;
-    const panel = popover === null ? "" : JSON.stringify([popover, devices[popover], savedDevice(popover), state.slot, state.noiseSuppression]);
+    const panel = popover === null ? "" : devicePanelKey(popover, devices[popover], session);
     if (panel !== shownPanel) {
       shownPanel = panel;
-      fill(panelSlot, popover ? devicePanel(popover) : null);
+      fill(panelSlot, popover ? devicePanel(popover, devices[popover], session) : null);
     }
     fill(
       dockBody,
@@ -300,23 +261,24 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
     renderDock();
   }
 
-  /** Paints how loud each visible seat is, every frame, without touching the DOM tree. */
+  /** How lit each seat's ring was last frame, keyed by seat. */
+  const shownLevels = new Map<string, number>();
+
+  /** Paints who's talking and the sensitivity meter, every frame, without touching the DOM tree. */
   function paintLevels(): void {
-    const painted = [...roomsSection.querySelectorAll<HTMLElement>("[data-level-slot]"), ...dock.querySelectorAll<HTMLElement>("[data-level-slot]")];
-    for (const element of painted) {
-      const slot = element.dataset.levelSlot;
-      const level = slot ? session.levelOf(Number(slot)) : 0;
-      element.style.setProperty("--level", level.toFixed(3));
-      element.classList.toggle("is-speaking", level > 0.08);
+    for (const row of roomsSection.querySelectorAll<HTMLElement>("[data-level-slot]")) {
+      const slot = row.dataset.levelSlot ?? "";
+      const level = Math.max(session.levelOf(Number(slot)), (shownLevels.get(slot) ?? 0) - RING_FADE_PER_FRAME);
+      shownLevels.set(slot, level);
+      row.classList.toggle("is-speaking", level > SPEAKING_LEVEL);
     }
+    const input = session.inputLevel().toFixed(3);
+    for (const bar of dock.querySelectorAll<HTMLElement>("[data-input-level]")) bar.style.setProperty("--level", input);
     frame = requestAnimationFrame(paintLevels);
   }
 
   function onOutsideClick(event: MouseEvent): void {
-    if (popover && !dock.contains(event.target as Node)) {
-      popover = null;
-      render();
-    }
+    if (popover && !dock.contains(event.target as Node)) setPopover(null);
   }
 
   session.onChange(render);
@@ -329,6 +291,7 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
     dock,
     destroy() {
       cancelAnimationFrame(frame);
+      closeUserMenu?.();
       document.removeEventListener("mousedown", onOutsideClick);
     },
   };

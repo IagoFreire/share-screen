@@ -38,13 +38,18 @@ export function saveDevice(kind: DeviceKind, deviceId: string): void {
   }
 }
 
+/** Windows labels end in the USB ids, "(1b1c:0a44)", which mean nothing to anyone. */
+export function cleanDeviceLabel(label: string): string {
+  return label.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, "").trim();
+}
+
 /** Both lists; labels are only filled once the microphone has been allowed. */
 export async function listAudioDevices(): Promise<Record<DeviceKind, AudioDevice[]>> {
   const all = await navigator.mediaDevices.enumerateDevices();
   const pick = (kind: MediaDeviceKind, fallback: string) =>
     all
       .filter((device) => device.kind === kind)
-      .map((device, index) => ({ deviceId: device.deviceId, label: device.label || `${fallback} ${index + 1}` }));
+      .map((device, index) => ({ deviceId: device.deviceId, label: cleanDeviceLabel(device.label) || `${fallback} ${index + 1}` }));
   return { input: pick("audioinput", "Microfone"), output: pick("audiooutput", "Saída") };
 }
 

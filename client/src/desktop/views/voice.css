@@ -1,62 +1,56 @@
 /* Voice rooms: the sidebar section and the dock above the user panel (voiceUi.ts).
    --level (0-1) is painted every frame on whoever is talking. */
 
-/* --- "Salas de voz" in the sidebar --- */
-.vc-rooms {
-  margin-top: 14px;
-  padding: 0 2px 8px;
-}
-
+/* --- "Salas de voz" in the sidebar, drawn like Discord's voice channels (and like
+   desktop.css's .desk-channel rows above them) --- */
 .vc-rooms-head {
   display: flex;
   align-items: center;
-  padding: 0 6px 6px 8px;
+  margin: 12px 0 4px;
+  padding: 0 4px 0 8px;
 }
 
 .vc-rooms-title {
   flex: 1 1 auto;
+  color: var(--desk-text-dim);
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--desk-text-dim);
 }
 
 .vc-add {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
   background: transparent;
-  color: var(--desk-text-muted);
+  color: var(--desk-text-dim);
   cursor: pointer;
-  transition: background-color var(--desk-fast) linear, color var(--desk-fast) linear;
+  transition: color var(--desk-fast) linear;
 }
 
 .vc-add:hover {
-  background: var(--desk-bg-hover);
   color: var(--desk-text);
 }
 
-.vc-add svg,
-.vc-room-icon svg {
-  width: 16px;
-  height: 16px;
+.vc-add svg {
+  width: 18px;
+  height: 18px;
 }
 
 .vc-create {
-  margin: 0 4px 8px;
+  margin: 0 0 6px;
 }
 
 .vc-create-input {
   box-sizing: border-box;
   width: 100%;
-  padding: 8px 10px;
+  padding: 7px 8px;
   border: 1px solid var(--desk-blurple);
-  border-radius: 8px;
+  border-radius: 4px;
   outline: none;
   background: var(--desk-bg-deep);
   color: var(--desk-text);
@@ -71,50 +65,46 @@
   color: var(--desk-text-dim);
 }
 
-/* A room is a card; the one you're in glows down its left edge. */
 .vc-room {
-  position: relative;
-  margin: 0 4px 6px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.02);
-  overflow: hidden;
-}
-
-.vc-room.is-here {
-  background: linear-gradient(135deg, rgba(35, 165, 90, 0.14), rgba(88, 101, 242, 0.1));
-  box-shadow: inset 3px 0 0 var(--desk-green);
+  margin-bottom: 2px;
 }
 
 .vc-room-head {
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 6px 8px;
   border: 0;
+  border-radius: 4px;
   background: transparent;
-  color: var(--desk-text-muted);
+  color: var(--desk-text-dim);
   font: inherit;
-  font-size: 14px;
   text-align: left;
   cursor: pointer;
   transition: background-color var(--desk-fast) linear, color var(--desk-fast) linear;
 }
 
-.vc-room-head:hover:not(:disabled) {
+.vc-room-head:hover {
   background: var(--desk-bg-hover);
-  color: var(--desk-text);
+  color: var(--desk-text-muted);
 }
 
-.vc-room-head:disabled {
+/* The room you're in, like the channel you're in above it. */
+.vc-room.is-here > .vc-room-head {
+  background: var(--desk-bg-active);
   color: var(--desk-text);
   cursor: default;
 }
 
 .vc-room-icon {
   display: inline-flex;
-  color: var(--desk-text-dim);
+}
+
+.vc-room-icon svg {
+  width: 18px;
+  height: 18px;
 }
 
 .vc-room-name {
@@ -123,52 +113,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 600;
+  font-weight: 500;
 }
 
-.vc-room-count {
-  min-width: 18px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-  font-size: 11px;
-  font-weight: 700;
-  text-align: center;
-}
-
-.vc-faces {
-  display: flex;
-  padding: 0 10px 9px 32px;
-}
-
-.vc-face {
-  width: 22px;
-  height: 22px;
-  margin-right: -6px;
-  border: 2px solid var(--desk-bg-sidebar);
-  border-radius: 50%;
-  font-size: 10px;
-}
-
-.vc-face.is-more {
-  display: grid;
-  place-items: center;
-  background: var(--desk-bg-active);
-  color: var(--desk-text-muted);
-  font-weight: 700;
-}
-
+/* Everyone in a room, under it: avatars line up with the room's name. */
 .vc-members {
-  padding: 0 6px 8px 22px;
+  padding: 2px 0 4px;
 }
 
 .vc-member {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 6px;
-  border-radius: 6px;
-  color: var(--desk-text-muted);
+  padding: 4px 8px 4px 32px;
+  color: var(--desk-text-dim);
   font-size: 14px;
 }
 
@@ -176,46 +134,45 @@
   color: var(--desk-text);
 }
 
-/* The speaking ring: a green halo that grows with how loud they are. */
-.vc-ring {
-  position: relative;
-  display: inline-grid;
-  border-radius: 50%;
+/* Anyone else's row opens their "Volume do usuário" (voiceUserMenu.ts). */
+button.vc-member {
+  box-sizing: border-box;
+  width: 100%;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--desk-fast) linear, color var(--desk-fast) linear;
 }
 
-.vc-ring::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  border: 2px solid var(--desk-green);
-  opacity: 0;
-  transform: scale(calc(1 + var(--level, 0) * 0.25));
-  transition: opacity 120ms linear;
-  pointer-events: none;
-}
-
-.vc-member.is-speaking .vc-ring::after {
-  opacity: 1;
-  box-shadow: 0 0 calc(4px + var(--level, 0) * 14px) rgba(35, 165, 90, 0.7);
-}
-
-.vc-avatar {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  font-size: 11px;
+button.vc-member:hover {
+  background: var(--desk-bg-hover);
+  color: var(--desk-text-muted);
 }
 
 /* Discord pictures, or the coloured initial dom.ts's avatar() falls back to. */
-.vc-avatar,
-.vc-face {
+.vc-avatar {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
   object-fit: cover;
   color: #fff;
+  font-size: 11px;
   font-weight: 700;
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+  transition: outline-color 80ms linear;
+}
+
+/* Discord's speaking ring. */
+.vc-member.is-speaking .vc-avatar {
+  outline-color: var(--desk-green);
 }
 
 .vc-member-name {
@@ -228,22 +185,22 @@
 
 .vc-flag {
   display: inline-flex;
-  color: var(--desk-red);
+  color: var(--desk-text-dim);
 }
 
 .vc-flag svg {
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
 }
 
 .vc-empty {
-  margin: 2px 12px 8px;
-  font-size: 12px;
+  margin: 4px 8px;
+  font-size: 13px;
   color: var(--desk-text-dim);
 }
 
 .vc-error {
-  margin: 4px 12px 8px;
+  margin: 4px 8px 8px;
   font-size: 12px;
   color: #fa777c;
 }
@@ -412,113 +369,6 @@
 
 .vc-noise.is-on {
   color: #a3abff;
-}
-
-/* --- Device popover, opening above the dock --- */
-.vc-popover {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: calc(100% + 8px);
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  border-radius: 10px;
-  background: var(--desk-bg-deep);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.06);
-  animation: vc-rise var(--desk-normal) var(--desk-ease) both;
-}
-
-.vc-pop-label {
-  margin: 0;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--desk-text-dim);
-}
-
-.vc-select {
-  width: 100%;
-  padding: 7px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 6px;
-  background: var(--desk-bg-sidebar);
-  color: var(--desk-text);
-  font: inherit;
-  font-size: 13px;
-}
-
-/* Input level: a bar that fills with how loud the microphone is. */
-.vc-meter {
-  position: relative;
-  height: 8px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.06);
-  overflow: hidden;
-}
-
-.vc-meter-fill {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, var(--desk-green), #e5c84b 70%, #f23f43);
-  transform-origin: left center;
-  transform: scaleX(var(--level, 0));
-}
-
-.vc-toggle-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-top: 4px;
-}
-
-.vc-toggle-row > span {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-}
-
-.vc-toggle-row strong {
-  font-size: 13px;
-}
-
-.vc-toggle-row small {
-  font-size: 11px;
-  color: var(--desk-text-dim);
-}
-
-.vc-switch {
-  position: relative;
-  flex: 0 0 auto;
-  width: 38px;
-  height: 22px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--desk-bg-active);
-  cursor: pointer;
-  transition: background-color var(--desk-fast) linear;
-}
-
-.vc-switch.is-on {
-  background: var(--desk-green);
-}
-
-.vc-switch-knob {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #fff;
-  transition: transform var(--desk-fast) var(--desk-ease);
-}
-
-.vc-switch.is-on .vc-switch-knob {
-  transform: translateX(16px);
 }
 
 @keyframes vc-pulse {

@@ -1,19 +1,15 @@
-import { loadRnnoise, RnnoiseWorkletNode } from "@sapphi-red/web-noise-suppressor";
-import rnnoiseWorkletUrl from "@sapphi-red/web-noise-suppressor/rnnoiseWorklet.js?url";
-import rnnoiseWasmUrl from "@sapphi-red/web-noise-suppressor/rnnoise.wasm?url";
-import rnnoiseSimdWasmUrl from "@sapphi-red/web-noise-suppressor/rnnoise_simd.wasm?url";
-import { VOICE_BITRATE_KBPS, VOICE_SAMPLE_RATE } from "@screenshare-bot/shared";
+import { VOICE_BITRATE_KBPS } from "@screenshare-bot/shared";
+import { openMicInput, type MicInputOptions } from "./micInput.js";
+import { createVoiceGate, dbOfRms, levelOfDb, rmsOf } from "./voiceLevel.js";
 
 /**
- * The voice-room microphone: capture -> RNNoise (optional) -> Opus. RNNoise is the
- * open-source neural noise suppressor from Xiph/Mozilla, run as WebAssembly in an
- * AudioWorklet, so nothing leaves the PC to be cleaned. It needs a 48 kHz context.
+ * The voice-room microphone: micInput.ts's cleaned, gained microphone -> the
+ * sensitivity gate -> Opus. Below the user's sensitivity nothing is encoded or sent,
+ * like Discord's voice activity; muting does the same.
  */
 
-export interface MicOptions {
-  /** Null for the system default. */
-  deviceId: string | null;
-  noiseSuppression: boolean;
+export interface MicOptions extends MicInputOptions {
+  sensitivityDb: number;
   onPacket(chunk: EncodedAudioChunk): void;
 }
 
@@ -21,68 +17,30 @@ export interface MicCapture {
   /** Whether RNNoise is actually running (it can fail to load and fall back). */
   readonly noiseSuppressed: boolean;
   setMuted(muted: boolean): void;
-  /** Loudness right now, 0 to 1, after noise suppression. */
-  level(): number;
+  setGain(gain: number): void;
+  setSensitivity(db: number): void;
+  /** Loudness 0-1 on voiceLevel.ts's scale, sent or not: the sensitivity meter. */
+  inputLevel(): number;
+  /** Whether the voice is going out right now: unmuted and above the sensitivity. */
+  transmitting(): boolean;
   stop(): void;
 }
 
 /** Audio frames the track may hold while the page is busy (see audioEncodePipeline.ts). */
 const TRACK_BUFFER_FRAMES = 100;
 
-/** The RNNoise binary, fetched once for every room joined. */
-let rnnoiseBinary: Promise<ArrayBuffer> | null = null;
-
-async function openMicrophone(deviceId: string | null, noiseSuppression: boolean): Promise<MediaStream> {
-  const constraints = (device: string | null): MediaStreamConstraints => ({
-    audio: {
-      ...(device ? { deviceId: { exact: device } } : {}),
-      channelCount: 1,
-      echoCancellation: true,
-      autoGainControl: true,
-      // With RNNoise on, Chromium's own suppression would only fight it.
-      noiseSuppression: !noiseSuppression,
-    },
-  });
-  try {
-    return await navigator.mediaDevices.getUserMedia(constraints(deviceId));
-  } catch (error) {
-    // The picked microphone was unplugged: the default one is better than silence.
-    if (deviceId === null) throw error;
-    return navigator.mediaDevices.getUserMedia(constraints(null));
-  }
-}
-
-async function addRnnoise(context: AudioContext, source: AudioNode): Promise<RnnoiseWorkletNode | null> {
-  try {
-    rnnoiseBinary ??= loadRnnoise({ url: rnnoiseWasmUrl, simdUrl: rnnoiseSimdWasmUrl });
-    await context.audioWorklet.addModule(rnnoiseWorkletUrl);
-    const node = new RnnoiseWorkletNode(context, { maxChannels: 1, wasmBinary: await rnnoiseBinary });
-    source.connect(node);
-    return node;
-  } catch (error) {
-    console.error("RNNoise unavailable; sending the microphone without it:", error);
-    rnnoiseBinary = null;
-    return null;
-  }
-}
-
 export async function startMicCapture(options: MicOptions): Promise<MicCapture> {
-  const stream = await openMicrophone(options.deviceId, options.noiseSuppression);
-  const context = new AudioContext({ sampleRate: VOICE_SAMPLE_RATE, latencyHint: "interactive" });
-  const source = context.createMediaStreamSource(stream);
-  const rnnoise = options.noiseSuppression ? await addRnnoise(context, source) : null;
-  const cleaned: AudioNode = rnnoise ?? source;
-
-  const analyser = context.createAnalyser();
-  analyser.fftSize = 512;
-  cleaned.connect(analyser);
-  const destination = context.createMediaStreamDestination();
+  const input = await openMicInput(options);
+  const destination = input.context.createMediaStreamDestination();
   destination.channelCount = 1;
-  cleaned.connect(destination);
+  input.output.connect(destination);
 
   let muted = false;
   let stopped = false;
   let configured = false;
+  let sending = false;
+  let sensitivityDb = options.sensitivityDb;
+  const gate = createVoiceGate();
   const encoder = new AudioEncoder({
     output: (chunk) => options.onPacket(chunk),
     error: (error) => console.error("Voice AudioEncoder error:", error),
@@ -91,10 +49,16 @@ export async function startMicCapture(options: MicOptions): Promise<MicCapture> 
   const reader = new MediaStreamTrackProcessor<AudioData>({ track, maxBufferSize: TRACK_BUFFER_FRAMES }).readable.getReader();
 
   const pump = (async () => {
+    let samples = new Float32Array(0);
     while (!stopped) {
       const { done, value: data } = await reader.read();
       if (done || !data) break;
-      if (muted) {
+      // The gate judges the very audio it lets through, timed by the audio's own clock.
+      if (samples.length !== data.numberOfFrames) samples = new Float32Array(data.numberOfFrames);
+      data.copyTo(samples, { planeIndex: 0, format: "f32-planar" });
+      const open = gate.pass(dbOfRms(rmsOf(samples)), sensitivityDb, data.timestamp / 1000);
+      sending = open && !muted;
+      if (!sending) {
         data.close();
         continue;
       }
@@ -113,26 +77,24 @@ export async function startMicCapture(options: MicOptions): Promise<MicCapture> 
   })();
   pump.catch((error) => console.error("Voice capture stopped unexpectedly:", error));
 
-  const samples = new Float32Array(analyser.fftSize);
   return {
-    noiseSuppressed: rnnoise !== null,
+    noiseSuppressed: input.noiseSuppressed,
     setMuted(next) {
       muted = next;
+      if (muted) sending = false;
     },
-    level() {
-      analyser.getFloatTimeDomainData(samples);
-      let sum = 0;
-      for (const sample of samples) sum += sample * sample;
-      return Math.min(1, Math.sqrt(sum / samples.length) * 4);
+    setGain: (gain) => input.setGain(gain),
+    setSensitivity(db) {
+      sensitivityDb = db;
     },
+    inputLevel: () => levelOfDb(input.db()),
+    transmitting: () => sending,
     stop() {
       if (stopped) return;
       stopped = true;
       reader.cancel().catch(() => undefined);
       if (encoder.state !== "closed") encoder.close();
-      rnnoise?.destroy();
-      for (const captured of stream.getTracks()) captured.stop();
-      context.close().catch(() => undefined);
+      input.close();
     },
   };
 }
