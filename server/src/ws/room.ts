@@ -1,5 +1,5 @@
 import type { WebSocket } from "ws";
-import type { AudioParams, LayerInfo, StreamInfo } from "@screenshare-bot/shared";
+import type { AppAudioStatus, AudioParams, LayerInfo, StreamInfo } from "@screenshare-bot/shared";
 import { MAX_PRESENTERS_PER_ROOM } from "@screenshare-bot/shared";
 import type { Audience } from "./audience.js";
 
@@ -17,6 +17,8 @@ interface PresenterSlot {
   layersInUse: number[] | null;
   /** Extra loudness an admin set for everyone (see StreamInfo.gain); 1 = as sent. */
   gain: number;
+  /** What the presenter's per-app audio captures, for admins; null until it says. */
+  audioStatus: AppAudioStatus | null;
 }
 
 /**
@@ -66,6 +68,16 @@ export class Room {
         ...(this.isPaused(slot) ? { paused: true } : {}),
         ...(presenter.gain !== 1 ? { gain: presenter.gain } : {}),
       }));
+  }
+
+  /** Records the presenter's per-app capture status (see presenter-audio-status). */
+  setAudioStatus(slot: number, audioStatus: AppAudioStatus): void {
+    const presenter = this.presenters.get(slot);
+    if (presenter) this.presenters.set(slot, { ...presenter, audioStatus });
+  }
+
+  audioStatusOf(slot: number): AppAudioStatus | null {
+    return this.presenters.get(slot)?.audioStatus ?? null;
   }
 
   /** Sets the broadcast's gain for everyone. Returns false when nothing changed. */
@@ -141,7 +153,7 @@ export class Room {
   ): number | null {
     // The audience starts unknown either way: a re-registered presenter restarts its
     // encoders, so it has to be told again whether anyone is watching.
-    const fresh = { ws, presenterId, audioParams, layers, audience: null, layersInUse: null, gain: 1 };
+    const fresh = { ws, presenterId, audioParams, layers, audience: null, layersInUse: null, gain: 1, audioStatus: null };
     const existing = this.slotOf(ws);
     if (existing !== null) {
       this.presenters.set(existing, fresh);

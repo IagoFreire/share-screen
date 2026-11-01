@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AudioApp, DesktopApi, DesktopSource, StoredLogin, UpdateStatus } from "@screenshare-bot/shared";
+import type {
+  AppAudioStatus,
+  AudioApp,
+  DesktopApi,
+  DesktopSource,
+  StoredLogin,
+  UpdateStatus,
+} from "@screenshare-bot/shared";
 
 /**
  * Exposes `window.desktop` to desktop.html. Every call is a narrow, typed IPC message;
@@ -49,6 +56,11 @@ const api: DesktopApi = {
     },
     onEnded: (listener) => {
       ipcRenderer.on("desktop:audio-ended", () => listener());
+    },
+    onStatus: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, status: AppAudioStatus) => listener(status);
+      ipcRenderer.on("desktop:audio-status", handler);
+      return () => ipcRenderer.removeListener("desktop:audio-status", handler);
     },
   },
   updates: {

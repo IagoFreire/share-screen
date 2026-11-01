@@ -1,5 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { AUDIO_BLOCK_BYTES, createBlockSplitter, isExeName, parseAudioApps } from "./audioHelper.js";
+import {
+  AUDIO_BLOCK_BYTES,
+  createBlockSplitter,
+  createLineSplitter,
+  isExeName,
+  parseAudioApps,
+  parseHelperStatus,
+} from "./audioHelper.js";
+
+describe("parseHelperStatus", () => {
+  it("reads the helper's status line", () => {
+    const line = 'status {"apps":[{"exe":"League of Legends.exe","state":"ok"},{"exe":"RiotClientServices.exe","state":"silent"}]}';
+
+    expect(parseHelperStatus(line)).toEqual({
+      apps: [
+        { exe: "League of Legends.exe", state: "ok" },
+        { exe: "RiotClientServices.exe", state: "silent" },
+      ],
+    });
+  });
+
+  it("ignores ordinary log lines and anything malformed", () => {
+    expect(parseHelperStatus("capture of process 12 ended: oops")).toBeNull();
+    expect(parseHelperStatus("status {not json")).toBeNull();
+    expect(parseHelperStatus('status {"apps":[{"exe":"a.exe","state":"weird"}]}')).toEqual({ apps: [] });
+  });
+});
+
+describe("createLineSplitter", () => {
+  it("hands over whole lines however stderr chunks them", () => {
+    const lines: string[] = [];
+    const push = createLineSplitter((line) => lines.push(line));
+
+    push(Buffer.from("status {\"apps\""));
+    push(Buffer.from(":[]}\r\nsecond\nthi"));
+    push(Buffer.from("rd\n"));
+
+    expect(lines).toEqual(['status {"apps":[]}', "second", "third"]);
+  });
+});
 
 describe("parseAudioApps", () => {
   it("groups sessions by app, keeping the loudest peak", () => {

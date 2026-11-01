@@ -284,6 +284,9 @@ function registerIpc(): void {
             appAudio = null;
             if (!sender.isDestroyed()) sender.send("desktop:audio-ended");
           },
+          (status) => {
+            if (!sender.isDestroyed()) sender.send("desktop:audio-status", status);
+          },
         );
       })(),
     );

@@ -1,4 +1,4 @@
-import type { DesktopUser } from "./protocol.js";
+import type { AppAudioStatus, DesktopUser } from "./protocol.js";
 
 /**
  * The bridge the desktop app's preload exposes as `window.desktop` to desktop.html.
@@ -34,6 +34,11 @@ export interface DesktopAppAudio {
   onBlock(listener: (pcm: Float32Array) => void): () => void;
   /** The helper died mid-live. */
   onEnded(listener: () => void): void;
+  /**
+   * Which apps the helper captures, whenever that changes. Optional: apps before 0.7.0
+   * don't have it. Returns an unsubscribe function.
+   */
+  onStatus?(listener: (status: AppAudioStatus) => void): () => void;
 }
 
 /** Where the app's own update stands (electron-updater, from the GitHub Releases). */

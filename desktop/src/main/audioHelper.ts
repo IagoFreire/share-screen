@@ -1,5 +1,42 @@
 import { spawn } from "node:child_process";
-import type { AudioApp } from "@screenshare-bot/shared";
+import type { AppAudioState, AppAudioStatus, AudioApp } from "@screenshare-bot/shared";
+
+const APP_AUDIO_STATES: readonly AppAudioState[] = ["ok", "covered", "quiet", "muted", "silent", "failed"];
+/** Bound on what one status line may carry to the page. */
+const MAX_STATUS_APPS = 32;
+
+/**
+ * The helper reports which apps it captures as `status {"apps":[{"exe","state"}]}` lines
+ * on stderr (see report_status in native/audio-helper). Null for any other line.
+ */
+export function parseHelperStatus(line: string): AppAudioStatus | null {
+  if (!line.startsWith("status ")) return null;
+  try {
+    const parsed = JSON.parse(line.slice("status ".length)) as { apps?: unknown };
+    if (!Array.isArray(parsed.apps)) return null;
+    const apps = parsed.apps
+      .filter(
+        (app): app is { exe: string; state: AppAudioState } =>
+          typeof app?.exe === "string" && APP_AUDIO_STATES.includes(app?.state as AppAudioState),
+      )
+      .slice(0, MAX_STATUS_APPS)
+      .map(({ exe, state }) => ({ exe, state }));
+    return { apps };
+  } catch {
+    return null;
+  }
+}
+
+/** Re-cuts stderr's arbitrary chunks into whole lines (without their line break). */
+export function createLineSplitter(onLine: (line: string) => void): (chunk: Buffer) => void {
+  let pending = "";
+  return (chunk) => {
+    pending += chunk.toString("utf8");
+    const lines = pending.split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) onLine(line.replace(/\r$/, ""));
+  };
+}
 
 /**
  * Talks to native/audio-helper (Rust): lists which apps are playing sound, and streams
@@ -86,6 +123,7 @@ export function startAppAudio(
   exclude: string[],
   onBlock: (block: Buffer) => void,
   onEnded: () => void,
+  onStatus?: (status: AppAudioStatus) => void,
 ): AppAudioCapture {
   const args = ["capture", "--exclude-pid", String(ownPid)];
   if (exclude.length > 0) args.push("--exclude", exclude.join(","));
@@ -93,7 +131,14 @@ export function startAppAudio(
   let stopped = false;
 
   child.stdout.on("data", createBlockSplitter(onBlock));
-  child.stderr.on("data", (data: Buffer) => console.warn(`audio-helper: ${data.toString("utf8").trim()}`));
+  child.stderr.on(
+    "data",
+    createLineSplitter((line) => {
+      const status = parseHelperStatus(line);
+      if (status) onStatus?.(status);
+      else if (line.trim()) console.warn(`audio-helper: ${line.trim()}`);
+    }),
+  );
   child.on("error", (error) => console.error("audio-helper failed:", error));
   child.on("close", () => {
     if (!stopped) onEnded();

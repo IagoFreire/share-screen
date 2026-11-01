@@ -2,6 +2,7 @@ import {
   AUDIO_QUALITY_DEFAULT,
   AUDIO_QUALITY_PRESETS,
   planLayers,
+  type AppAudioStatus,
   type ControlMessage,
   type QualityPreset,
 } from "@screenshare-bot/shared";
@@ -142,6 +143,18 @@ export async function startDesktopBroadcast(
   const appAudioTrack: { current: AppAudioTrack | null } = { current: null };
   const audio = options.audio;
   const appAudio = options.appAudio;
+
+  // Which apps the helper captures, for admins (see presenter-audio-status). The first
+  // report can come before the relay registers this broadcast, which it then ignores,
+  // so the latest one is sent again on presenting-started.
+  let audioStatus: AppAudioStatus | null = null;
+  const stopAudioStatus =
+    audio.mode === "apps"
+      ? appAudio?.onStatus?.((status) => {
+          audioStatus = status;
+          ws.sendControl({ kind: "presenter-audio-status", status });
+        })
+      : undefined;
   const session = factories.createSession({
     sendFrame: (header, payload) => ws.sendFrame(header, payload),
     sendControl: (message) => ws.sendControl(message),
@@ -169,6 +182,7 @@ export async function startDesktopBroadcast(
     if (finished) return;
     finished = true;
     if (reason !== "ended") session.stop();
+    stopAudioStatus?.();
     appAudioTrack.current?.stop();
     ws.close();
     if (reason === "stopped") return;
@@ -181,7 +195,12 @@ export async function startDesktopBroadcast(
     if (message.kind === "audience-changed") {
       options.onAudience({ watchers: message.watchers, videoWatchers: message.videoWatchers });
     }
-    if (session.handleControl(message)) return;
+    if (session.handleControl(message)) {
+      if (message.kind === "presenting-started" && audioStatus) {
+        ws.sendControl({ kind: "presenter-audio-status", status: audioStatus });
+      }
+      return;
+    }
     if (message.kind === "play-alert") options.onAlert();
     else if (message.kind === "error") finish({ interrupted: `A transmissão foi encerrada: ${message.message}` });
   };

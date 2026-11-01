@@ -20,6 +20,7 @@ import { pausesSiblingConnections, resolveJoinIdentity, startsWatchingNothing } 
 import { createAutoLayer, type AutoLayer } from "./autoLayer.js";
 import { countAudience, videoLayersInUse } from "./audience.js";
 import { createKeyframeThrottle } from "./keyframeThrottle.js";
+import { sanitizeAudioStatus } from "./audioStatus.js";
 import { countSpectators, listRoomPeople } from "./viewerList.js";
 
 /** The frame header carries the layer in 2 bits. */
@@ -253,6 +254,21 @@ function refreshAudiences(room: Room): void {
   if (syncAudiences(room)) broadcastStreams(room);
 }
 
+/** Tells every admin watching `slot` what its presenter's per-app audio captures. */
+function sendAudioStatusToAdmins(room: Room, slot: number): void {
+  const status = room.audioStatusOf(slot);
+  room.forEachViewer((viewer) => {
+    const viewerState = getState(viewer);
+    if (viewerState.selectedSlot === slot && isAdmin(viewerState.userId)) send(viewer, { kind: "audio-status", slot, status });
+  });
+}
+
+/** An admin just started watching a broadcast: catch them up on its capture status. */
+function sendAudioStatusTo(ws: WebSocket, state: ConnectionState, room: Room): void {
+  if (state.selectedSlot === null || !isAdmin(state.userId)) return;
+  send(ws, { kind: "audio-status", slot: state.selectedSlot, status: room.audioStatusOf(state.selectedSlot) });
+}
+
 /** Simulcast layers announced by a presenter, or undefined when it sends a single version. */
 function validLayers(value: unknown): LayerInfo[] | undefined {
   if (!Array.isArray(value) || value.length < 2 || value.length > MAX_LAYERS) return undefined;
@@ -458,6 +474,7 @@ async function handleJoin(
   if (pausedChanged) broadcastStreams(room);
   // Everyone already in the room hears about the newcomer too, not just on leaving.
   else announceViewerCount(room);
+  sendAudioStatusTo(ws, state, room);
 }
 
 function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
@@ -539,6 +556,7 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       state.autoLayer = null; // the new broadcast's "auto" starts over from its best layer
       announceLayer(ws, state, room); // new stream, decoder starts cold
       refreshAudiences(room); // the old broadcast may have lost its last viewer, the new one gained one
+      sendAudioStatusTo(ws, state, room);
       return;
     }
 
@@ -581,6 +599,18 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
 
       const presenter = room.getPresenter(message.slot);
       if (presenter) send(presenter.ws, { kind: "play-alert" });
+      return;
+    }
+
+    // A desktop presenter's per-app audio capture status, kept for admins only: which apps
+    // a live's sound really comes from is about someone else's PC.
+    case "presenter-audio-status": {
+      if (!state.roomId || state.presenterSlot === null) return;
+      const room = roomManager.getRoom(state.roomId);
+      const status = sanitizeAudioStatus(message.status);
+      if (!room || !status) return;
+      room.setAudioStatus(state.presenterSlot, status);
+      sendAudioStatusToAdmins(room, state.presenterSlot);
       return;
     }
 
@@ -676,7 +706,10 @@ function handleSlotWentAway(room: Room, freedSlot: number): void {
 
   syncAudiences(room); // the fallback just inherited those viewers
   broadcastStreams(room);
-  if (fallback !== null) requestKeyframeFromSlot(room, fallback);
+  if (fallback !== null) {
+    requestKeyframeFromSlot(room, fallback);
+    sendAudioStatusToAdmins(room, fallback);
+  }
 }
 
 export function handleClose(ws: WebSocket): void {

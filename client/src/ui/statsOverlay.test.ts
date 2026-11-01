@@ -60,6 +60,27 @@ describe("stats overlay", () => {
     expect(audio).toBe("Áudio: nível silêncio · folga 300 ms · velocidade 1,0000× · falhas 0 · saltos ao vivo 0");
   });
 
+  it("shows admins what the presenter's per-app audio captures", () => {
+    const lines = formatPlaybackStats({
+      audio: null,
+      video: null,
+      receiver,
+      layer: null,
+      autoLayer: false,
+      capture: {
+        apps: [
+          { exe: "League of Legends.exe", state: "ok" },
+          { exe: "RiotClientServices.exe", state: "silent" },
+          { exe: "game.exe", state: "muted" },
+        ],
+      },
+    });
+
+    expect(lines[4]).toBe(
+      "Captura do apresentador: League of Legends ✓ · RiotClientServices: pai mudo, trocado pelos apps de dentro · game: ✗ toca, mas a captura sai muda",
+    );
+  });
+
   it("opens on Ctrl+Shift+S only", () => {
     expect(isStatsShortcut({ ctrlKey: true, shiftKey: true, code: "KeyS" } as KeyboardEvent)).toBe(true);
     expect(isStatsShortcut({ ctrlKey: true, shiftKey: false, code: "KeyS" } as KeyboardEvent)).toBe(false);

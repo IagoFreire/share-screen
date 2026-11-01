@@ -1,3 +1,4 @@
+import type { AppAudioState, AppAudioStatus } from "@screenshare-bot/shared";
 import type { AudioPlaybackStats } from "../playback/audioDecodePipeline.js";
 import type { ReceiverStats } from "../playback/streamReceiver.js";
 import type { VideoPlaybackStats } from "../playback/videoDecodePipeline.js";
@@ -16,6 +17,26 @@ export interface PlaybackStatsInput {
   /** Simulcast layer being received; null for a single-version broadcast. */
   layer: number | null;
   autoLayer: boolean;
+  /** Admins: what the presenter's per-app audio captures (audio-status). */
+  capture?: AppAudioStatus | null;
+}
+
+const CAPTURE_STATES: Record<AppAudioState, string> = {
+  ok: "✓",
+  covered: "✓ (pelo processo pai)",
+  quiet: "sem som agora",
+  muted: "✗ toca, mas a captura sai muda",
+  silent: "pai mudo, trocado pelos apps de dentro",
+  failed: "✗ a captura falhou",
+};
+
+function captureLine(capture: AppAudioStatus): string {
+  if (capture.apps.length === 0) return "Captura do apresentador: nenhum app com som";
+  const apps = capture.apps.map(({ exe, state }) => {
+    const name = exe.replace(/\.exe$/i, "");
+    return state === "ok" ? `${name} ✓` : `${name}: ${CAPTURE_STATES[state]}`;
+  });
+  return `Captura do apresentador: ${apps.join(" · ")}`;
 }
 
 const REFRESH_MS = 500;
@@ -24,7 +45,7 @@ const SILENCE_DB = -90;
 
 const decimal = (value: number, digits: number) => value.toFixed(digits).replace(".", ",");
 
-export function formatPlaybackStats({ audio, video, receiver, layer, autoLayer }: PlaybackStatsInput): string[] {
+export function formatPlaybackStats({ audio, video, receiver, layer, autoLayer, capture }: PlaybackStatsInput): string[] {
   // The Opus decoder outputs tiny non-zero values for silence (-600 dB and the like).
   const level = audio && audio.peakDb > SILENCE_DB ? `${Math.round(audio.peakDb)} dB` : "silêncio";
   const audioLine = audio
@@ -42,7 +63,7 @@ export function formatPlaybackStats({ audio, video, receiver, layer, autoLayer }
     `avisos de congestionamento ${receiver.congestionReports}`;
   const qualityLine =
     layer === null ? "Qualidade: versão única" : `Qualidade: camada ${layer}${autoLayer ? " (automático)" : ""}`;
-  return [audioLine, videoLine, networkLine, qualityLine];
+  return [audioLine, videoLine, networkLine, qualityLine, ...(capture ? [captureLine(capture)] : [])];
 }
 
 export function isStatsShortcut(event: KeyboardEvent): boolean {

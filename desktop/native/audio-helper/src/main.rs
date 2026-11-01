@@ -29,7 +29,7 @@ use wasapi::{
 };
 
 use drift::DriftResampler;
-use policy::{ExclusionPolicy, ProcessInfo, capture_roots, clamp_all, json_escape, mix_into};
+use policy::{ExclusionPolicy, ProcessInfo, RootHealth, capture_roots, clamp_all, json_escape, mix_into, roots_to_demote};
 
 const SAMPLE_RATE: usize = 48_000;
 const CHANNELS: usize = 2;
@@ -49,6 +49,16 @@ const EVENT_TIMEOUT_MS: u32 = 200;
 /// Falling this far behind the wall clock means the PC stalled; restart the schedule.
 const MAX_SCHEDULE_LAG: Duration = Duration::from_millis(200);
 const MAX_ANCESTRY_DEPTH: usize = 32;
+/// A session meter above this is an app playing sound.
+const AUDIBLE_PEAK: f32 = 0.001;
+/// A captured sample above this (-80 dBFS) is sound rather than silence.
+const AUDIBLE_SAMPLE: f32 = 0.0001;
+/// An app counts as playing once its meter has shown sound for this long...
+const PLAYING_FOR: Duration = Duration::from_secs(2);
+/// ...and a capture root silent this long while one plays inside its tree is dropped.
+const SILENT_ROOT_AFTER: Duration = Duration::from_secs(3);
+/// A capture that delivered sound this recently counts as "ok" in the status.
+const RECENT_SOUND: Duration = Duration::from_secs(3);
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -85,19 +95,27 @@ struct ActiveSession {
 fn list_sessions() -> Res<Vec<ActiveSession>> {
     let enumerator = DeviceEnumerator::new()?;
     let mut sessions = Vec::new();
+    // One device or session that can't be read is skipped, never allowed to fail the
+    // whole scan: that kept every app opened afterwards (a game started mid-live) out of
+    // the capture while the ones already in it carried on.
     for device in &enumerator.get_device_collection(&Direction::Render)? {
-        let device = device?;
-        let enumerated = device.get_iaudiosessionmanager()?.get_audiosessionenumerator()?;
-        for index in 0..enumerated.get_count()? {
-            let control = enumerated.get_session(index)?;
-            if control.get_state()? == SessionState::Expired {
+        let Ok(device) = device else { continue };
+        let Ok(enumerated) = device.get_iaudiosessionmanager().and_then(|manager| manager.get_audiosessionenumerator())
+        else {
+            continue;
+        };
+        let Ok(count) = enumerated.get_count() else { continue };
+        for index in 0..count {
+            let Ok(control) = enumerated.get_session(index) else { continue };
+            if !matches!(control.get_state(), Ok(state) if state != SessionState::Expired) {
                 continue;
             }
+            let Ok(pid) = control.get_process_id() else { continue };
             let peak = control
                 .get_audiometerinformation()
                 .and_then(|meter| meter.get_peak_value())
                 .unwrap_or(0.0);
-            sessions.push(ActiveSession { pid: control.get_process_id()?, peak });
+            sessions.push(ActiveSession { pid, peak });
         }
     }
     Ok(sessions)
@@ -158,9 +176,14 @@ fn print_sessions(args: &Args) -> Res<()> {
 struct Source {
     samples: Arc<Mutex<VecDeque<f32>>>,
     stopped: Arc<AtomicBool>,
+    /// The capture ended with an error rather than being stopped.
+    failed: Arc<AtomicBool>,
     primed: bool,
     /// Reads the source at its sound card's pace rather than the mixer's.
     resampler: DriftResampler,
+    started: Instant,
+    /// Last time the capture delivered sound; None until it does.
+    last_audible: Option<Instant>,
 }
 
 fn read_f32_frames(bytes: &mut VecDeque<u8>, block_align: usize, out: &mut Vec<f32>) {
@@ -207,19 +230,94 @@ fn capture_loop(pid: u32, samples: Arc<Mutex<VecDeque<f32>>>, stopped: Arc<Atomi
 fn start_source(pid: u32) -> Source {
     let samples = Arc::new(Mutex::new(VecDeque::new()));
     let stopped = Arc::new(AtomicBool::new(false));
-    let (thread_samples, thread_stopped) = (Arc::clone(&samples), Arc::clone(&stopped));
+    let failed = Arc::new(AtomicBool::new(false));
+    let (thread_samples, thread_stopped, thread_failed) = (Arc::clone(&samples), Arc::clone(&stopped), Arc::clone(&failed));
     thread::spawn(move || {
         if let Err(error) = capture_loop(pid, thread_samples, Arc::clone(&thread_stopped)) {
             eprintln!("capture of process {pid} ended: {error}");
+            thread_failed.store(true, Ordering::Relaxed);
         }
         thread_stopped.store(true, Ordering::Relaxed);
     });
-    Source { samples, stopped, primed: false, resampler: DriftResampler::new() }
+    Source {
+        samples,
+        stopped,
+        failed,
+        primed: false,
+        resampler: DriftResampler::new(),
+        started: Instant::now(),
+        last_audible: None,
+    }
+}
+
+/// What the helper learns about the apps over one capture.
+#[derive(Default)]
+struct Health {
+    /// Since when each session's meter has been showing sound, by pid.
+    playing_since: HashMap<u32, Instant>,
+    /// Roots that failed, or stayed silent while an app inside them played, with why:
+    /// the apps under them are captured on their own from then on.
+    dropped: HashMap<u32, &'static str>,
+    /// The last status line printed, so only changes are reported.
+    last_status: String,
+}
+
+/// One app's state in the status line, best first when several processes share a name.
+fn state_rank(state: &str) -> usize {
+    ["ok", "covered", "quiet", "muted", "silent", "failed"].iter().position(|s| *s == state).unwrap_or(9)
+}
+
+/// Prints `status {"apps":[{"exe":..,"state":..}]}` to stderr when it changed; the app
+/// forwards it to admins (see desktop/src/main/audioHelper.ts). States: "ok" captured and
+/// sounding, "covered" heard through a parent's capture, "quiet" captured while silent,
+/// "muted" playing but its capture silent, "silent"/"failed" dropped as a root.
+fn report_status(
+    system: &System,
+    candidates: &[(u32, Vec<u32>)],
+    roots: &[u32],
+    sources: &HashMap<u32, Source>,
+    health: &mut Health,
+    now: Instant,
+) {
+    let mut best: HashMap<String, (String, &'static str)> = HashMap::new();
+    for (pid, _) in candidates {
+        let exe = exe_name(system, *pid);
+        if exe.is_empty() {
+            continue;
+        }
+        let state = if let Some(reason) = health.dropped.get(pid) {
+            *reason
+        } else if !roots.contains(pid) {
+            "covered"
+        } else if sources.get(pid).and_then(|source| source.last_audible).is_some_and(|at| now - at < RECENT_SOUND) {
+            "ok"
+        } else if health.playing_since.get(pid).is_some_and(|since| now - *since >= PLAYING_FOR) {
+            "muted"
+        } else {
+            "quiet"
+        };
+        let key = exe.to_lowercase();
+        let better = best.get(&key).is_none_or(|(_, current)| state_rank(state) < state_rank(current));
+        if better {
+            best.insert(key, (exe, state));
+        }
+    }
+    let mut apps: Vec<(String, &'static str)> = best.into_values().collect();
+    apps.sort();
+    let entries: Vec<String> = apps
+        .iter()
+        .map(|(exe, state)| format!("{{\"exe\":\"{}\",\"state\":\"{}\"}}", json_escape(exe), state))
+        .collect();
+    let line = format!("status {{\"apps\":[{}]}}", entries.join(","));
+    if line != health.last_status {
+        eprintln!("{line}");
+        health.last_status = line;
+    }
 }
 
 /// Opens captures for newly playing apps and closes the ones that went away or that
 /// a parent capture now covers.
-fn rescan(sources: &mut HashMap<u32, Source>, policy: &ExclusionPolicy, system: &mut System) -> Res<()> {
+fn rescan(sources: &mut HashMap<u32, Source>, policy: &ExclusionPolicy, system: &mut System, health: &mut Health) -> Res<()> {
     system.refresh_processes(ProcessesToUpdate::All, true);
     let table: Vec<ProcessInfo> = system
         .processes()
@@ -230,17 +328,53 @@ fn rescan(sources: &mut HashMap<u32, Source>, policy: &ExclusionPolicy, system: 
         })
         .collect();
     let own_pid = std::process::id();
-    let candidates: Vec<(u32, Vec<u32>)> = list_sessions()?
-        .into_iter()
-        // The capture clients this helper opens show up as a session of its own.
-        .filter(|session| session.pid != own_pid)
+    let now = Instant::now();
+    // The capture clients this helper opens show up as a session of its own.
+    let sessions: Vec<ActiveSession> = list_sessions()?.into_iter().filter(|session| session.pid != own_pid).collect();
+    for session in &sessions {
+        if session.peak > AUDIBLE_PEAK {
+            health.playing_since.entry(session.pid).or_insert(now);
+        } else {
+            health.playing_since.remove(&session.pid);
+        }
+    }
+    let candidates: Vec<(u32, Vec<u32>)> = sessions
+        .iter()
         .map(|session| (session.pid, ancestors(system, session.pid)))
         .filter(|(pid, chain)| policy.includes(*pid, &exe_name(system, *pid), chain))
         .filter(|(pid, _)| policy.safe_to_capture(*pid, &table))
         .collect();
-    let roots = capture_roots(&candidates);
 
     let debug = std::env::var_os("AUDIO_HELPER_DEBUG").is_some();
+
+    // A capture that failed, or that stays silent while an app inside its tree keeps
+    // playing, isn't carrying that tree (Windows gives silence, not an error, for what
+    // it can't capture): drop it and capture the apps under it on their own.
+    for (pid, source) in sources.iter() {
+        if source.failed.load(Ordering::Relaxed) {
+            health.dropped.entry(*pid).or_insert("failed");
+        }
+    }
+    let running: Vec<RootHealth> = sources
+        .iter()
+        .filter(|(_, source)| !source.stopped.load(Ordering::Relaxed))
+        .map(|(pid, source)| RootHealth { pid: *pid, silent_for: now - source.last_audible.unwrap_or(source.started) })
+        .collect();
+    let playing: Vec<(u32, Vec<u32>)> = candidates
+        .iter()
+        .filter(|(pid, _)| health.playing_since.get(pid).is_some_and(|since| now - *since >= PLAYING_FOR))
+        .cloned()
+        .collect();
+    for pid in roots_to_demote(&running, &playing, SILENT_ROOT_AFTER) {
+        if debug {
+            eprintln!("dropping silent root {pid} ({}): capturing the apps under it instead", exe_name(system, pid));
+        }
+        health.dropped.entry(pid).or_insert("silent");
+    }
+    let eligible: Vec<(u32, Vec<u32>)> =
+        candidates.iter().filter(|(pid, _)| !health.dropped.contains_key(pid)).cloned().collect();
+    let roots = capture_roots(&eligible);
+
     sources.retain(|pid, source| {
         let keep = roots.contains(pid) && !source.stopped.load(Ordering::Relaxed);
         if !keep {
@@ -251,14 +385,15 @@ fn rescan(sources: &mut HashMap<u32, Source>, policy: &ExclusionPolicy, system: 
         }
         keep
     });
-    for pid in roots {
-        sources.entry(pid).or_insert_with(|| {
+    for pid in &roots {
+        sources.entry(*pid).or_insert_with(|| {
             if debug {
-                eprintln!("capture {pid} ({}) ancestors {:?}", exe_name(system, pid), ancestors(system, pid));
+                eprintln!("capture {pid} ({}) ancestors {:?}", exe_name(system, *pid), ancestors(system, *pid));
             }
-            start_source(pid)
+            start_source(*pid)
         });
     }
+    report_status(system, &candidates, &roots, sources, health, now);
     Ok(())
 }
 
@@ -273,6 +408,9 @@ fn mix_block(sources: &mut HashMap<u32, Source>) -> Vec<f32> {
             }
         }
         let chunk = source.resampler.pull(&mut queue, BLOCK_FRAMES, TARGET_FRAMES);
+        if chunk.iter().any(|sample| sample.abs() > AUDIBLE_SAMPLE) {
+            source.last_audible = Some(Instant::now());
+        }
         mix_into(&mut mix, &chunk);
         if chunk.len() < BLOCK_SAMPLES {
             // Ran dry: build the cushion up again.
@@ -296,6 +434,7 @@ fn run_capture(args: &Args) -> Res<()> {
     let policy = ExclusionPolicy::new(&args.exclude, args.exclude_pid);
     let mut system = process_table();
     let mut sources: HashMap<u32, Source> = HashMap::new();
+    let mut health = Health::default();
     let mut stdout = io::stdout().lock();
     let mut last_scan: Option<Instant> = None;
     let mut schedule_start = Instant::now();
@@ -303,7 +442,7 @@ fn run_capture(args: &Args) -> Res<()> {
 
     loop {
         if last_scan.is_none_or(|at| at.elapsed() >= RESCAN_INTERVAL) {
-            if let Err(error) = rescan(&mut sources, &policy, &mut system) {
+            if let Err(error) = rescan(&mut sources, &policy, &mut system, &mut health) {
                 eprintln!("session scan failed: {error}");
             }
             last_scan = Some(Instant::now());

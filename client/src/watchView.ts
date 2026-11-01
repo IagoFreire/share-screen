@@ -1,6 +1,7 @@
 import {
   FrameType,
   type ActiveBroadcast,
+  type AppAudioStatus,
   type AudioParams,
   type ControlMessage,
   type EncodedFrame,
@@ -190,7 +191,10 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     requestKeyframe: () => wsClient.sendControl({ kind: "request-keyframe" }),
     reportCongestion: () => wsClient.sendControl({ kind: "report-congestion" }),
   });
+  /** Admins: what the watched presenter's per-app audio captures (audio-status). */
+  let captureStatus: AppAudioStatus | null = null;
   const statsOverlay = createStatsOverlay(player, () => ({
+    capture: captureStatus,
     audio: audioDecodePipeline?.stats() ?? null,
     video: videoDecodePipeline?.stats() ?? null,
     receiver: receiver.stats(),
@@ -408,6 +412,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   async function selectStream(slot: number | null): Promise<void> {
     if (slot === selectedSlot) return;
     selectedSlot = slot;
+    captureStatus = null; // the relay sends the new broadcast's own
     if (!isOwnSlot(slot)) ownPicked = false;
     wsClient.sendControl(selectStreamMessage(slot));
 
@@ -623,6 +628,10 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
       case "viewers":
         viewersMenu.show(message.viewers);
+        return;
+
+      case "audio-status":
+        if (message.slot === currentStream()?.slot) captureStatus = message.status;
         return;
 
       case "layer-changed":

@@ -1,6 +1,8 @@
 //! Pure rules for the capture: which audio sessions go into the live mix, and how
 //! their samples are combined. Kept free of Windows APIs so `cargo test` covers them.
 
+use std::time::Duration;
+
 /// Which processes stay out of the live: by executable name (the user's list, e.g.
 /// Discord) and by process tree (the ScreenShare app itself, so watching someone while
 /// broadcasting never echoes back).
@@ -61,6 +63,27 @@ pub fn capture_roots(candidates: &[(u32, Vec<u32>)]) -> Vec<u32> {
         .iter()
         .filter(|(_, ancestors)| !ancestors.iter().any(|ancestor| pids.contains(ancestor)))
         .map(|(pid, _)| *pid)
+        .collect()
+}
+
+/// How a capture root is doing, for deciding whether it really carries its tree.
+pub struct RootHealth {
+    pub pid: u32,
+    /// How long its capture has delivered only silence (counted from its start).
+    pub silent_for: Duration,
+}
+
+/// Roots whose capture stays silent while an app inside their tree keeps playing (its
+/// session meter says so). Windows' "this process and its children" isn't carrying that
+/// app -- and it doesn't say so: a capture it can't serve just delivers silence -- so the
+/// root is dropped and the apps under it get captured on their own. `audible` lists the
+/// candidates that have been playing for a while, each with its parent chain.
+pub fn roots_to_demote(roots: &[RootHealth], audible: &[(u32, Vec<u32>)], min_silence: Duration) -> Vec<u32> {
+    roots
+        .iter()
+        .filter(|root| root.silent_for >= min_silence)
+        .filter(|root| audible.iter().any(|(pid, ancestors)| *pid != root.pid && ancestors.contains(&root.pid)))
+        .map(|root| root.pid)
         .collect()
 }
 
@@ -170,5 +193,49 @@ mod tests {
     #[test]
     fn escapes_names_for_json() {
         assert_eq!(json_escape(r#"a"b\c"#), r#"a\"b\\c"#);
+    }
+
+    const SECONDS: fn(u64) -> Duration = Duration::from_secs;
+
+    #[test]
+    fn drops_a_launcher_whose_capture_stays_silent_while_its_game_plays() {
+        // Riot Client (10) is the root; League (11) runs under it and is playing.
+        let roots = [RootHealth { pid: 10, silent_for: SECONDS(5) }];
+        let audible = [(11, vec![10, 1])];
+
+        assert_eq!(roots_to_demote(&roots, &audible, SECONDS(3)), vec![10]);
+    }
+
+    #[test]
+    fn keeps_a_root_that_delivered_sound_lately() {
+        let roots = [RootHealth { pid: 10, silent_for: SECONDS(1) }];
+        let audible = [(11, vec![10, 1])];
+
+        assert!(roots_to_demote(&roots, &audible, SECONDS(3)).is_empty());
+    }
+
+    #[test]
+    fn keeps_a_silent_root_when_nothing_inside_it_plays() {
+        let roots = [RootHealth { pid: 10, silent_for: SECONDS(60) }];
+        let audible = [(20, vec![1])]; // playing, but in another tree
+
+        assert!(roots_to_demote(&roots, &audible, SECONDS(3)).is_empty());
+    }
+
+    #[test]
+    fn a_root_playing_itself_is_not_a_reason_to_drop_it() {
+        // Its own sound missing can't be fixed by capturing its children instead.
+        let roots = [RootHealth { pid: 10, silent_for: SECONDS(60) }];
+        let audible = [(10, vec![1])];
+
+        assert!(roots_to_demote(&roots, &audible, SECONDS(3)).is_empty());
+    }
+
+    #[test]
+    fn the_apps_under_a_dropped_root_become_roots_themselves() {
+        let candidates = vec![(10, vec![1]), (11, vec![10, 1]), (12, vec![11, 10, 1])];
+        let without_dropped: Vec<(u32, Vec<u32>)> = candidates.into_iter().filter(|(pid, _)| *pid != 10).collect();
+
+        assert_eq!(capture_roots(&without_dropped), vec![11]);
     }
 }

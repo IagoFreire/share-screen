@@ -92,6 +92,20 @@ export interface AudioParams {
 }
 
 /**
+ * What the desktop app's audio helper says about each app it could put in the live
+ * (see audio-helper's report_status): "ok" captured and sounding, "covered" heard
+ * through a parent process's capture, "quiet" captured but silent right now, "muted"
+ * playing yet its capture is silent, "silent" a parent dropped for staying silent while
+ * an app inside it played (its apps are captured on their own), "failed" a capture that
+ * errored. Shown to admins in the stats overlay.
+ */
+export type AppAudioState = "ok" | "covered" | "quiet" | "muted" | "silent" | "failed";
+
+export interface AppAudioStatus {
+  apps: Array<{ exe: string; state: AppAudioState }>;
+}
+
+/**
  * One live broadcast within a room. A room supports several at once (up to
  * MAX_PRESENTERS_PER_ROOM), each pinned to the frame header's `slot` field, and every
  * viewer picks exactly one to watch at a time -- so egress stays "viewers x bitrate"
@@ -293,6 +307,13 @@ export type ControlMessage =
    * the new stream list, so late joiners get it too. 1 is as sent; see StreamInfo.gain.
    */
   | { kind: "set-stream-gain"; slot: number; gain: number }
+  /** Desktop presenter -> server: which apps its per-app audio is capturing (AppAudioStatus). */
+  | { kind: "presenter-audio-status"; status: AppAudioStatus }
+  /**
+   * Server -> an admin watching `slot`: that presenter's capture status, so "no game
+   * sound" can be diagnosed without touching their PC. Null when it never sent one.
+   */
+  | { kind: "audio-status"; slot: number; status: AppAudioStatus | null }
   /** Viewer -> server, and server -> presenter; `layer` (to the presenter) names the encoder. */
   | { kind: "request-keyframe"; layer?: number }
   /**
