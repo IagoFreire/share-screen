@@ -47,9 +47,9 @@ describe("stats overlay", () => {
     expect(video).toBe("Vídeo: fila 0 · descartados 0 · no decoder 0 (0 ms) · sobrecargas 0 · aguardando keyframe");
   });
 
-  it("calls a silent stream silence", () => {
+  it("calls a silent stream silence, including the decoder's near-zero noise", () => {
     const [audio] = formatPlaybackStats({
-      audio: { leadMs: 300, underruns: 0, catchUps: 0, playbackRate: 1, peakDb: -Infinity },
+      audio: { leadMs: 300, underruns: 0, catchUps: 0, playbackRate: 1, peakDb: -674 },
       video: null,
       receiver,
       layer: null,

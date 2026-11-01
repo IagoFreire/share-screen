@@ -19,11 +19,14 @@ export interface PlaybackStatsInput {
 }
 
 const REFRESH_MS = 500;
+/** Anything quieter than this is no sound at all, as far as anyone can hear. */
+const SILENCE_DB = -90;
 
 const decimal = (value: number, digits: number) => value.toFixed(digits).replace(".", ",");
 
 export function formatPlaybackStats({ audio, video, receiver, layer, autoLayer }: PlaybackStatsInput): string[] {
-  const level = audio && Number.isFinite(audio.peakDb) ? `${Math.round(audio.peakDb)} dB` : "silêncio";
+  // The Opus decoder outputs tiny non-zero values for silence (-600 dB and the like).
+  const level = audio && audio.peakDb > SILENCE_DB ? `${Math.round(audio.peakDb)} dB` : "silêncio";
   const audioLine = audio
     ? `Áudio: nível ${level} · folga ${Math.round(audio.leadMs)} ms · velocidade ${decimal(audio.playbackRate, 4)}× · ` +
       `falhas ${audio.underruns} · saltos ao vivo ${audio.catchUps}`
