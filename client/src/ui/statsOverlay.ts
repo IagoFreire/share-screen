@@ -33,7 +33,7 @@ export function formatPlaybackStats({ audio, video, receiver, layer, autoLayer }
     : "Áudio: sem áudio";
   const videoLine = video
     ? `Vídeo: fila ${video.queuedFrames} · descartados ${video.droppedFrames} · no decoder ${video.decodeQueue} ` +
-      `(${Math.round(video.decodeLagMs)} ms) · sobrecargas ${video.overloads}` +
+      `(${Math.round(video.decodeLagMs)} ms) · sobrecargas ${video.overloads} · alcances ${video.catchUps}` +
       (video.waitingForKeyframe ? " · aguardando keyframe" : "")
     : "Vídeo: sem vídeo";
   const delay = receiver.queueDelayMs === null ? "—" : `${Math.round(receiver.queueDelayMs)} ms`;

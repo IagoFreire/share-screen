@@ -19,8 +19,10 @@ export interface VideoPlaybackStats {
   queuedFrames: number;
   /** Chunks inside the decoder, not decoded yet. */
   decodeQueue: number;
-  /** How far, in stream time, decoding trails what was handed to the decoder. */
+  /** How long the oldest chunk inside the decoder has waited, ms. */
   decodeLagMs: number;
+  /** Times a backlog stuck in the decoder was dropped to get back to live. */
+  catchUps: number;
   /** Times the decoder fell so far behind that its backlog was thrown away. */
   overloads: number;
   waitingForKeyframe: boolean;
@@ -81,14 +83,23 @@ export interface VideoDecodePipelineOptions {
 }
 
 /**
- * The decoder this far behind what it was handed means this machine decodes slower
- * than the stream arrives; the backlog would only grow, putting the picture further
- * behind every second, so it is dropped instead. Measured in stream time, not in
- * queued chunks: a hardware decoder routinely holds 30+ chunks while decoded frames
- * wait in the jitter buffer, and treating that as overload killed the decoder dozens
- * of times a minute -- a freeze-and-keyframe each time.
+ * How long the oldest chunk has waited inside the decoder is what says it fell behind
+ * -- measured on the wall clock, so sparse frames (a still screen) never look late, and
+ * not in queued chunks: a hardware decoder routinely holds 30+ of those while decoded
+ * frames wait in the jitter buffer, and counting them killed it dozens of times a
+ * minute.
+ *
+ * Past MAX_DECODE_WAIT_MS this machine can't keep up: the backlog is dropped and "auto"
+ * is told to step down. A smaller wait that lasts (CATCH_UP_*) is a backlog stuck in
+ * place -- typically left by a minimized window, after which the decoder only runs as
+ * fast as frames are shown, so it never drains -- and the decoder is just restarted on
+ * a fresh keyframe.
  */
-const MAX_DECODE_LAG_US = 2_000_000;
+const MAX_DECODE_WAIT_MS = 2000;
+const CATCH_UP_WAIT_MS = 500;
+const CATCH_UP_AFTER_MS = 2000;
+/** Bound on the bookkeeping of chunks inside the decoder. */
+const MAX_PENDING_CHUNKS = 600;
 /** A typical display refresh until the real one has been measured. */
 const DEFAULT_REFRESH_MS = 1000 / 60;
 
@@ -113,9 +124,11 @@ export async function startVideoDecodePipeline(
   let rafHandle = 0;
   /** A decoder can only start on a keyframe; true until one has been decoded. */
   let waitingForKeyframe = true;
-  /** Stream time of the newest chunk handed to the decoder, and of its newest output. */
-  let lastSubmittedUs: number | null = null;
-  let lastOutputUs: number | null = null;
+  /** Chunks inside the decoder: stream timestamp -> performance.now() when handed in, oldest first. */
+  let pending = new Map<number, number>();
+  /** Since when the oldest chunk has waited longer than CATCH_UP_WAIT_MS; null when not. */
+  let laggingSince: number | null = null;
+  let catchUps = 0;
 
   // Maps stream timestamps onto local wall-clock time. Established from the first frame
   // and re-established whenever playback falls behind (see presentFrames).
@@ -231,7 +244,11 @@ export async function startVideoDecodePipeline(
       frame.close();
       return;
     }
-    lastOutputUs = frame.timestamp;
+    // This chunk is out, and so is everything handed in before it.
+    for (const timestampUs of pending.keys()) {
+      if (timestampUs > frame.timestamp) break;
+      pending.delete(timestampUs);
+    }
 
     // Chunks handed to the decoder before a resync keep producing output afterwards,
     // so emptying the queue isn't enough on its own -- that backlog would flow right
@@ -282,24 +299,51 @@ export async function startVideoDecodePipeline(
   }
   let decoder = createDecoder();
 
+  /** Throws away everything inside the decoder and restarts on the next keyframe. */
+  function restartDecoder(): void {
+    if (decoder.state !== "closed") decoder.close();
+    decoder = createDecoder();
+    pending = new Map();
+    laggingSince = null;
+    needKeyframe();
+  }
+
+  /** Restarts a decoder that fell behind; see MAX_DECODE_WAIT_MS. */
+  function checkDecoderLag(): void {
+    // A hidden window's decoder isn't judged: it would only be stepped down for nobody,
+    // and coming back runs resyncToLive, which starts it fresh anyway.
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      laggingSince = null;
+      return;
+    }
+    const now = performance.now();
+    const oldest = pending.values().next();
+    const waitMs = oldest.done ? 0 : now - oldest.value;
+    if (waitMs > MAX_DECODE_WAIT_MS) {
+      restartDecoder();
+      overloads += 1;
+      onOverload?.();
+    } else if (waitMs > CATCH_UP_WAIT_MS) {
+      laggingSince ??= now;
+      if (now - laggingSince >= CATCH_UP_AFTER_MS) {
+        restartDecoder();
+        catchUps += 1;
+      }
+    } else {
+      laggingSince = null;
+    }
+  }
+
   rafHandle = requestAnimationFrame(presentFrames);
 
   return {
     decodeChunk: (chunk) => {
       if (stopped) return;
-      if (decoder.state === "closed") decoder = createDecoder();
-
-      // Deltas only: a keyframe may legitimately jump ahead (a broadcast resuming after
-      // a pause), and the decoder restarts on it anyway.
-      if (!chunk.keyFrame && lastOutputUs !== null && chunk.timestampUs - lastOutputUs > MAX_DECODE_LAG_US) {
-        decoder.close();
+      if (decoder.state === "closed") {
         decoder = createDecoder();
-        lastSubmittedUs = null;
-        lastOutputUs = null;
-        overloads += 1;
-        needKeyframe();
-        onOverload?.();
+        pending = new Map();
       }
+      checkDecoderLag();
 
       // A decoder can only start on a keyframe; silently wait until one arrives
       // (e.g. right after connecting, or after a request-keyframe round-trip).
@@ -314,7 +358,8 @@ export async function startVideoDecodePipeline(
           }),
         );
         waitingForKeyframe = false;
-        lastSubmittedUs = chunk.timestampUs;
+        pending.set(chunk.timestampUs, performance.now());
+        if (pending.size > MAX_PENDING_CHUNKS) pending.delete(pending.keys().next().value!);
       } catch (error) {
         // Refused outright (e.g. "a key frame is required"): start over on a keyframe.
         console.error("Video decode refused a chunk:", error);
@@ -331,9 +376,12 @@ export async function startVideoDecodePipeline(
       droppedFrames,
       queuedFrames: queue.length,
       decodeQueue: decoder.decodeQueueSize,
-      decodeLagMs:
-        lastSubmittedUs !== null && lastOutputUs !== null ? Math.max(0, (lastSubmittedUs - lastOutputUs) / 1000) : 0,
+      decodeLagMs: (() => {
+        const oldest = pending.values().next();
+        return oldest.done ? 0 : Math.max(0, performance.now() - oldest.value);
+      })(),
       overloads,
+      catchUps,
       waitingForKeyframe,
     }),
     resyncToLive: () => {
@@ -348,6 +396,15 @@ export async function startVideoDecodePipeline(
       queue.length = 0;
       baseTimestampUs = null;
       waitingForKeyframe = true;
+
+      // The backlog built while hidden also sits inside the decoder, where emptying the
+      // queue above doesn't reach. Left there it kept the picture ~1 s behind, stuttering,
+      // until the app was restarted; a fresh decoder drops it. The caller asks for the
+      // keyframe it starts on.
+      if (decoder.state !== "closed") decoder.close();
+      decoder = createDecoder();
+      pending = new Map();
+      laggingSince = null;
     },
     stop: () => {
       stopped = true;

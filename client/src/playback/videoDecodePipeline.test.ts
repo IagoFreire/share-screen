@@ -114,34 +114,90 @@ describe("startVideoDecodePipeline", () => {
     expect(FakeDecoder.last!.decoded.map((chunk) => chunk.type)).toEqual(["key"]);
   });
 
-  it("drops the decoder's backlog when this machine falls seconds behind the stream", async () => {
-    const onKeyframeNeeded = vi.fn();
-    const onOverload = vi.fn();
-    const pipeline = await startVideoDecodePipeline(fakeCanvas(), { onKeyframeNeeded, onOverload });
-    pipeline.decodeChunk(key);
-    FakeDecoder.last!.init.output(fakeFrame(0)); // decoded up to t=0...
+  describe("a decoder falling behind", () => {
+    let perfNow = 0;
+    beforeEach(() => {
+      perfNow = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => perfNow);
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
 
-    pipeline.decodeChunk({ ...delta, timestampUs: 3_000_000 }); // ...while chunks reach t=3 s
+    it("drops the backlog and says so when chunks wait in it for seconds", async () => {
+      const onKeyframeNeeded = vi.fn();
+      const onOverload = vi.fn();
+      const pipeline = await startVideoDecodePipeline(fakeCanvas(), { onKeyframeNeeded, onOverload });
+      pipeline.decodeChunk(key); // never comes out
 
-    expect(FakeDecoder.created).toBe(2);
-    expect(onOverload).toHaveBeenCalledTimes(1);
-    expect(onKeyframeNeeded).toHaveBeenCalledTimes(1);
-    expect(pipeline.stats().overloads).toBe(1);
-  });
+      perfNow = 2500;
+      pipeline.decodeChunk({ ...delta, timestampUs: 16_667 });
 
-  it("leaves a busy decoder alone while it keeps up with the stream", async () => {
-    // A hardware decoder routinely holds dozens of chunks while decoded frames wait in
-    // the jitter buffer; counting them as overload killed the decoder over and over.
-    const onOverload = vi.fn();
-    const pipeline = await startVideoDecodePipeline(fakeCanvas(), { onOverload });
-    pipeline.decodeChunk(key);
-    FakeDecoder.last!.init.output(fakeFrame(0));
-    FakeDecoder.last!.decodeQueueSize = 100;
+      expect(FakeDecoder.created).toBe(2);
+      expect(onOverload).toHaveBeenCalledTimes(1);
+      expect(onKeyframeNeeded).toHaveBeenCalledTimes(1);
+      expect(pipeline.stats().overloads).toBe(1);
+    });
 
-    pipeline.decodeChunk({ ...delta, timestampUs: 500_000 });
+    it("catches up a backlog stuck a little behind, without calling it overload", async () => {
+      // After a minimized stretch the decoder can stay ~1 s behind for good: it decodes
+      // only as fast as frames are shown, so the backlog never drains.
+      const onKeyframeNeeded = vi.fn();
+      const onOverload = vi.fn();
+      const pipeline = await startVideoDecodePipeline(fakeCanvas(), { onKeyframeNeeded, onOverload });
+      const first = FakeDecoder.last!;
+      for (let t = 0; t <= 4000 && FakeDecoder.created === 1; t += 100) {
+        perfNow = t;
+        pipeline.decodeChunk({ keyFrame: t === 0, timestampUs: t * 1000, data: new Uint8Array(1) });
+        if (t >= 800) first.init.output(fakeFrame((t - 800) * 1000)); // always 800 ms late
+      }
 
-    expect(FakeDecoder.created).toBe(1);
-    expect(onOverload).not.toHaveBeenCalled();
+      expect(FakeDecoder.created).toBe(2);
+      expect(onOverload).not.toHaveBeenCalled();
+      expect(onKeyframeNeeded).toHaveBeenCalledTimes(1);
+      expect(pipeline.stats().catchUps).toBe(1);
+    });
+
+    it("leaves a busy decoder alone while it keeps up", async () => {
+      // A hardware decoder routinely holds dozens of chunks while decoded frames wait in
+      // the jitter buffer; counting them as overload killed the decoder over and over.
+      const onOverload = vi.fn();
+      const pipeline = await startVideoDecodePipeline(fakeCanvas(), { onOverload });
+      for (let t = 0; t <= 5000; t += 100) {
+        perfNow = t;
+        FakeDecoder.last!.decodeQueueSize = 100;
+        pipeline.decodeChunk({ keyFrame: t === 0, timestampUs: t * 1000, data: new Uint8Array(1) });
+        FakeDecoder.last!.init.output(fakeFrame(t * 1000));
+      }
+
+      expect(FakeDecoder.created).toBe(1);
+      expect(onOverload).not.toHaveBeenCalled();
+    });
+
+    it("doesn't judge the decoder while the window is hidden", async () => {
+      vi.stubGlobal("document", { visibilityState: "hidden" });
+      const onOverload = vi.fn();
+      const pipeline = await startVideoDecodePipeline(fakeCanvas(), { onOverload });
+      pipeline.decodeChunk(key);
+
+      perfNow = 10_000;
+      pipeline.decodeChunk({ ...delta, timestampUs: 16_667 });
+
+      expect(FakeDecoder.created).toBe(1);
+      expect(onOverload).not.toHaveBeenCalled();
+    });
+
+    it("resyncToLive also throws away what is still inside the decoder", async () => {
+      const pipeline = await startVideoDecodePipeline(fakeCanvas());
+      pipeline.decodeChunk(key);
+
+      pipeline.resyncToLive();
+      pipeline.decodeChunk(delta);
+      pipeline.decodeChunk(key);
+
+      expect(FakeDecoder.created).toBe(2);
+      expect(FakeDecoder.last!.decoded.map((chunk) => chunk.type)).toEqual(["key"]);
+    });
   });
 
   it("awaitKeyframe holds deltas back until the next keyframe (a frame went missing)", async () => {
