@@ -22,6 +22,15 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+rem The same split happens when the bot is still up on another PC: the tunnel is the same
+rem everywhere, and nothing on this machine shows it. So ask the public address whether a
+rem bot already answers there. Any failure to ask (no internet, tunnel down) lets it start.
+powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; $cfg = Join-Path $env:USERPROFILE '.cloudflared\screenshare-bot.yml'; if (-not (Test-Path $cfg)) { exit 0 }; $m = Select-String -Path $cfg -Pattern 'hostname:\s*(\S+)' | Select-Object -First 1; if (-not $m) { exit 0 }; $url = 'https://' + $m.Matches[0].Groups[1].Value.Trim([char]34, [char]39) + '/'; try { if ((Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 10).StatusCode -eq 200) { exit 1 } } catch { }; exit 0"
+if errorlevel 1 (
+  echo O bot ja esta no ar em outro computador: o endereco publico respondeu. Feche as janelas do bot la e rode de novo.
+  pause
+  exit /b 1
+)
 
 echo Compilando a versao de producao...
 call npm run build
