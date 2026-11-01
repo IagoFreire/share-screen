@@ -385,7 +385,13 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
       ),
       toggle,
     );
+    // The app list is rebuilt every APPS_POLL_INTERVAL_MS (the level meters move), and a
+    // new list starts scrolled to the top: someone scrolling a long list got thrown back
+    // up every 1.5 s. Carry the position over to the rebuilt one.
+    const scrollTop = audioBox.querySelector<HTMLElement>(".desk-app-list")?.scrollTop ?? 0;
     audioBox.replaceChildren(...(audio ? [header, renderAudioQuality(), renderAppList()] : [header]));
+    const list = audioBox.querySelector<HTMLElement>(".desk-app-list");
+    if (list) list.scrollTop = scrollTop;
     renderEstimate();
   }
 
