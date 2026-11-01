@@ -23,13 +23,15 @@ const REFRESH_MS = 500;
 const decimal = (value: number, digits: number) => value.toFixed(digits).replace(".", ",");
 
 export function formatPlaybackStats({ audio, video, receiver, layer, autoLayer }: PlaybackStatsInput): string[] {
+  const level = audio && Number.isFinite(audio.peakDb) ? `${Math.round(audio.peakDb)} dB` : "silêncio";
   const audioLine = audio
-    ? `Áudio: folga ${Math.round(audio.leadMs)} ms · velocidade ${decimal(audio.playbackRate, 4)}× · ` +
+    ? `Áudio: nível ${level} · folga ${Math.round(audio.leadMs)} ms · velocidade ${decimal(audio.playbackRate, 4)}× · ` +
       `falhas ${audio.underruns} · saltos ao vivo ${audio.catchUps}`
     : "Áudio: sem áudio";
   const videoLine = video
-    ? `Vídeo: fila ${video.queuedFrames} · descartados ${video.droppedFrames} · no decoder ${video.decodeQueue} · ` +
-      `sobrecargas ${video.overloads}${video.waitingForKeyframe ? " · aguardando keyframe" : ""}`
+    ? `Vídeo: fila ${video.queuedFrames} · descartados ${video.droppedFrames} · no decoder ${video.decodeQueue} ` +
+      `(${Math.round(video.decodeLagMs)} ms) · sobrecargas ${video.overloads}` +
+      (video.waitingForKeyframe ? " · aguardando keyframe" : "")
     : "Vídeo: sem vídeo";
   const delay = receiver.queueDelayMs === null ? "—" : `${Math.round(receiver.queueDelayMs)} ms`;
   const networkLine =

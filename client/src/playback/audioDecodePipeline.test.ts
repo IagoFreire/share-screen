@@ -11,21 +11,22 @@ interface Played {
 }
 
 let ctxTime = 0;
-let outputTimestamp: { contextTime: number; performanceTime: number } | null = null;
+let contextOutputLatency = 0;
+/** What every decoded sample holds. */
+let sampleValue = 0;
 let played: Played[] = [];
 let decoders: FakeAudioDecoder[] = [];
 let lastDecodedUs = 0;
 
 class FakeAudioContext {
   state = "running";
-  outputLatency = 0;
   baseLatency = 0;
   destination = {};
   get currentTime() {
     return ctxTime;
   }
-  getOutputTimestamp() {
-    return outputTimestamp ?? { contextTime: 0, performanceTime: 0 };
+  get outputLatency() {
+    return contextOutputLatency;
   }
   createGain() {
     return { gain: { value: 1 }, connect() {} };
@@ -74,7 +75,9 @@ class FakeAudioDecoder {
       numberOfFrames: 960,
       sampleRate: 48_000,
       format: "f32-planar",
-      copyTo() {},
+      copyTo(destination: Float32Array) {
+        destination.fill(sampleValue);
+      },
       close() {},
     });
   }
@@ -118,7 +121,8 @@ function seamsMs(): number[] {
 describe("audio decode pipeline", () => {
   beforeEach(() => {
     ctxTime = 0;
-    outputTimestamp = null;
+    contextOutputLatency = 0;
+    sampleValue = 0;
     played = [];
     decoders = [];
     vi.stubGlobal("AudioContext", FakeAudioContext);
@@ -134,6 +138,7 @@ describe("audio decode pipeline", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("plays a steady stream back to back", () => {
@@ -224,18 +229,55 @@ describe("audio decode pipeline", () => {
     void pipeline;
   });
 
-  it("reads the audible position from the output timestamp when the browser gives one", () => {
+  it("subtracts the output latency and moves smoothly between audio callbacks", () => {
     const clock = createMediaClock();
     const pipeline = startAudioDecodePipeline({ sampleRate: 48_000, channels: 2 }, clock);
     feed(pipeline, [{ tsUs: T0_US, at: 1 }]);
     const firstStart = played[0]!.start;
+    let perfNow = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => perfNow);
     ctxTime = firstStart + 0.1;
-    // The speakers are 40 ms behind what the context has rendered.
-    outputTimestamp = { contextTime: firstStart + 0.06, performanceTime: performance.now() };
+    contextOutputLatency = 0.04; // the speakers trail what the context rendered
 
-    expect(clock.currentTimestampUs()! - T0_US).toBeGreaterThanOrEqual(59_000);
-    expect(clock.currentTimestampUs()! - T0_US).toBeLessThan(70_000);
+    const atCallback = clock.currentTimestampUs()! - T0_US;
+    perfNow += 5; // between two callbacks currentTime doesn't move
+    const fiveMsLater = clock.currentTimestampUs()! - T0_US;
+    perfNow += 500; // a stalled context must not run on forever
+    const muchLater = clock.currentTimestampUs()! - T0_US;
+
+    expect(atCallback).toBeCloseTo(60_000, -2);
+    expect(fiveMsLater - atCallback).toBeCloseTo(5_000, -2);
+    expect(muchLater - atCallback).toBeLessThanOrEqual(20_000);
     void pipeline;
+  });
+
+  it("never runs the video clock backwards when the next audio callback lands", () => {
+    const clock = createMediaClock();
+    const pipeline = startAudioDecodePipeline({ sampleRate: 48_000, channels: 2 }, clock);
+    feed(pipeline, [{ tsUs: T0_US, at: 1 }]);
+    let perfNow = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => perfNow);
+    ctxTime = played[0]!.start + 0.1;
+
+    clock.currentTimestampUs();
+    perfNow += 16; // carried forward 16 ms...
+    const carried = clock.currentTimestampUs()!;
+    ctxTime += 0.01; // ...but the callback only moved currentTime by 10 ms
+    const afterCallback = clock.currentTimestampUs()!;
+
+    expect(afterCallback).toBeGreaterThanOrEqual(carried);
+    void pipeline;
+  });
+
+  it("reports how loud the received sound is, and silence as such", () => {
+    const pipeline = startAudioDecodePipeline({ sampleRate: 48_000, channels: 2 });
+    feed(pipeline, [{ tsUs: T0_US, at: 1 }]);
+    expect(pipeline.stats().peakDb).toBe(-Infinity);
+
+    sampleValue = 0.5;
+    feed(pipeline, [{ tsUs: T0_US + 20_000, at: 1.02 }]);
+
+    expect(pipeline.stats().peakDb).toBeCloseTo(-6, 0);
   });
 
   it("reset silences everything already scheduled, for a switch to another broadcast", () => {

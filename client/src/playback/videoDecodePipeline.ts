@@ -19,6 +19,8 @@ export interface VideoPlaybackStats {
   queuedFrames: number;
   /** Chunks inside the decoder, not decoded yet. */
   decodeQueue: number;
+  /** How far, in stream time, decoding trails what was handed to the decoder. */
+  decodeLagMs: number;
   /** Times the decoder fell so far behind that its backlog was thrown away. */
   overloads: number;
   waitingForKeyframe: boolean;
@@ -79,11 +81,14 @@ export interface VideoDecodePipelineOptions {
 }
 
 /**
- * Chunks waiting inside the decoder past this (~0.5 s at 60 fps) mean this machine
- * decodes slower than the stream arrives. The backlog would only grow, putting the
- * picture further behind with every second, so it is dropped instead.
+ * The decoder this far behind what it was handed means this machine decodes slower
+ * than the stream arrives; the backlog would only grow, putting the picture further
+ * behind every second, so it is dropped instead. Measured in stream time, not in
+ * queued chunks: a hardware decoder routinely holds 30+ chunks while decoded frames
+ * wait in the jitter buffer, and treating that as overload killed the decoder dozens
+ * of times a minute -- a freeze-and-keyframe each time.
  */
-const MAX_DECODE_QUEUE = 30;
+const MAX_DECODE_LAG_US = 2_000_000;
 /** A typical display refresh until the real one has been measured. */
 const DEFAULT_REFRESH_MS = 1000 / 60;
 
@@ -108,6 +113,9 @@ export async function startVideoDecodePipeline(
   let rafHandle = 0;
   /** A decoder can only start on a keyframe; true until one has been decoded. */
   let waitingForKeyframe = true;
+  /** Stream time of the newest chunk handed to the decoder, and of its newest output. */
+  let lastSubmittedUs: number | null = null;
+  let lastOutputUs: number | null = null;
 
   // Maps stream timestamps onto local wall-clock time. Established from the first frame
   // and re-established whenever playback falls behind (see presentFrames).
@@ -223,6 +231,7 @@ export async function startVideoDecodePipeline(
       frame.close();
       return;
     }
+    lastOutputUs = frame.timestamp;
 
     // Chunks handed to the decoder before a resync keep producing output afterwards,
     // so emptying the queue isn't enough on its own -- that backlog would flow right
@@ -280,9 +289,13 @@ export async function startVideoDecodePipeline(
       if (stopped) return;
       if (decoder.state === "closed") decoder = createDecoder();
 
-      if (decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
+      // Deltas only: a keyframe may legitimately jump ahead (a broadcast resuming after
+      // a pause), and the decoder restarts on it anyway.
+      if (!chunk.keyFrame && lastOutputUs !== null && chunk.timestampUs - lastOutputUs > MAX_DECODE_LAG_US) {
         decoder.close();
         decoder = createDecoder();
+        lastSubmittedUs = null;
+        lastOutputUs = null;
         overloads += 1;
         needKeyframe();
         onOverload?.();
@@ -301,6 +314,7 @@ export async function startVideoDecodePipeline(
           }),
         );
         waitingForKeyframe = false;
+        lastSubmittedUs = chunk.timestampUs;
       } catch (error) {
         // Refused outright (e.g. "a key frame is required"): start over on a keyframe.
         console.error("Video decode refused a chunk:", error);
@@ -317,6 +331,8 @@ export async function startVideoDecodePipeline(
       droppedFrames,
       queuedFrames: queue.length,
       decodeQueue: decoder.decodeQueueSize,
+      decodeLagMs:
+        lastSubmittedUs !== null && lastOutputUs !== null ? Math.max(0, (lastSubmittedUs - lastOutputUs) / 1000) : 0,
       overloads,
       waitingForKeyframe,
     }),

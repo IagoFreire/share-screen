@@ -20,6 +20,11 @@ export interface AudioPlaybackStats {
   catchUps: number;
   /** Current playback rate; 1 except while gently steering the lead. */
   playbackRate: number;
+  /**
+   * Loudest received sample over the last second, dBFS; -Infinity for pure silence --
+   * which tells "the sender sends silence" apart from "it doesn't play here".
+   */
+  peakDb: number;
 }
 
 export interface AudioDecodePipeline {
@@ -52,6 +57,10 @@ const RATE_GAIN = 0.02;
 const MAX_RATE_DEVIATION = 0.002;
 /** Scheduled packets are remembered this long after they end, for the video clock. */
 const HISTORY_SECONDS = 1;
+/** The video clock is carried past currentTime by at most one audio callback. */
+const MAX_CLOCK_CARRY_SECONDS = 0.02;
+/** The level shown in the stats is the loudest sample over this long. */
+const PEAK_WINDOW_SECONDS = 1;
 
 /** One packet handed to the AudioContext. */
 interface Scheduled {
@@ -102,6 +111,8 @@ export function startAudioDecodePipeline(params: AudioParams, clock?: MediaClock
   let underruns = 0;
   let catchUps = 0;
   let playbackRate = 1;
+  /** Loudest sample of each recently decoded packet, with when it was decoded. */
+  let recentPeaks: Array<{ at: number; peak: number }> = [];
 
   /** Stops everything from context time `cut` on, so a jump never plays over old sound. */
   function cutFrom(cut: number): void {
@@ -122,6 +133,13 @@ export function startAudioDecodePipeline(params: AudioParams, clock?: MediaClock
     return 1 + Math.max(-MAX_RATE_DEVIATION, Math.min(MAX_RATE_DEVIATION, error * RATE_GAIN));
   }
 
+  function notePeak(channelData: Float32Array): void {
+    let peak = 0;
+    for (const sample of channelData) peak = Math.max(peak, Math.abs(sample));
+    const now = audioContext.currentTime;
+    recentPeaks = [...recentPeaks.filter((entry) => now - entry.at < PEAK_WINDOW_SECONDS), { at: now, peak }];
+  }
+
   function toAudioBuffer(audioData: AudioData): AudioBuffer {
     // Trust the decoded frame's own shape rather than the negotiated params: a
     // mismatch here throws inside copyTo and kills playback entirely.
@@ -133,6 +151,7 @@ export function startAudioDecodePipeline(params: AudioParams, clock?: MediaClock
       for (let channel = 0; channel < frameChannels; channel += 1) {
         const channelData = new Float32Array(audioData.numberOfFrames);
         audioData.copyTo(channelData, { planeIndex: channel, format: "f32-planar" });
+        notePeak(channelData);
         buffer.copyToChannel(channelData, channel);
       }
     } else {
@@ -144,6 +163,7 @@ export function startAudioDecodePipeline(params: AudioParams, clock?: MediaClock
         for (let i = 0; i < audioData.numberOfFrames; i += 1) {
           channelData[i] = interleaved[i * frameChannels + channel]!;
         }
+        notePeak(channelData);
         buffer.copyToChannel(channelData, channel);
       }
     }
@@ -205,22 +225,34 @@ export function startAudioDecodePipeline(params: AudioParams, clock?: MediaClock
   }
   let decoder = createDecoder();
 
+  /** When currentTime last moved: its value, and performance.now() at that moment. */
+  let lastTick = { contextTime: -1, perfMs: 0 };
+  /** The last value handed out, so the clock never steps backwards by a carry. */
+  let lastAudible = -Infinity;
+
   /**
-   * Context time the speakers are emitting right now. getOutputTimestamp() pairs the
-   * output position with a performance.now() moment, so it can be carried forward
-   * smoothly; currentTime only moves once per audio callback (~10 ms steps on Windows),
-   * which showed up as uneven frame pacing in video locked to it.
+   * Context time the speakers are emitting right now. currentTime only moves once per
+   * audio callback (~10 ms steps on Windows), which shows up as uneven frame pacing in
+   * video locked to it, so it is carried forward by the wall clock between steps --
+   * never further than one step, so a stalled context can't run away.
+   *
+   * On Bluetooth headphones outputLatency routinely runs 100-200 ms, squarely in visible
+   * lip-sync territory, hence the subtraction. (getOutputTimestamp() was tried for this
+   * and left video stuck behind in a real live; currentTime - outputLatency is the one
+   * that has held up.)
    */
   function audibleContextTime(): number {
     const now = audioContext.currentTime;
-    const stamp = audioContext.getOutputTimestamp?.();
-    if (stamp?.contextTime && stamp.performanceTime) {
-      const audible = stamp.contextTime + (performance.now() - stamp.performanceTime) / 1000;
-      if (audible <= now && audible > now - 1) return audible;
-    }
-    // On Bluetooth headphones outputLatency routinely runs 100-200 ms, squarely in
-    // visible lip-sync territory.
-    return now - (audioContext.outputLatency || 0);
+    const perfMs = performance.now();
+    if (now !== lastTick.contextTime) lastTick = { contextTime: now, perfMs };
+    const sinceTick = Math.min(MAX_CLOCK_CARRY_SECONDS, (perfMs - lastTick.perfMs) / 1000);
+    const audible = now + sinceTick - (audioContext.outputLatency || 0);
+    // Carrying forward can overshoot the next callback by a few ms; stepping back then
+    // would make video re-show or skip a frame. Only a real jump (a changed output
+    // latency, a device switch) may move it back.
+    if (audible < lastAudible && lastAudible - audible < MAX_CLOCK_CARRY_SECONDS) return lastAudible;
+    lastAudible = audible;
+    return audible;
   }
 
   // Become the master clock for video playback (see mediaClock.ts).
@@ -259,6 +291,7 @@ export function startAudioDecodePipeline(params: AudioParams, clock?: MediaClock
       underruns,
       catchUps,
       playbackRate,
+      peakDb: 20 * Math.log10(Math.max(0, ...recentPeaks.map((entry) => entry.peak))),
     }),
     setVolume: (volume) => {
       gainNode.gain.value = Math.min(MAX_VOLUME, Math.max(0, volume));
