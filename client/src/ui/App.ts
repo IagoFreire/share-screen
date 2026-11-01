@@ -33,6 +33,7 @@ import {
 } from "./icons.js";
 import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } from "./broadcastsPanel.js";
 import { createQualityMenu, type QualityChoice } from "./qualityMenu.js";
+import { createGainControl } from "./gainControl.js";
 import { createViewersMenu } from "./viewersMenu.js";
 
 /** Where the desktop app (Janja) is downloaded from. */
@@ -219,6 +220,13 @@ export function mountApp(options: MountAppOptions): void {
   });
   liveButton.before(qualityMenu.element);
 
+  // Admin-only: louder for everyone watching this broadcast (see gainControl.ts).
+  const gainControl = createGainControl((gain) => {
+    const stream = currentStream();
+    if (stream) wsClient.sendControl({ kind: "set-stream-gain", slot: stream.slot, gain });
+  });
+  qualityMenu.element.before(gainControl.element);
+
   // Who is in the room, beside the count it names. Lazy like the broadcast list.
   const viewersMenu = createViewersMenu({
     requestList: () => wsClient.sendControl({ kind: "request-viewers" }),
@@ -229,6 +237,9 @@ export function mountApp(options: MountAppOptions): void {
   /** Single place that reflects presenter state into the button, status line and idle screen. */
   function render(): void {
     qualityMenu.update(isWatchingSelf() ? undefined : currentStream()?.layers, layerChoice, currentLayer);
+    // Your own broadcast is never played back to you, so there's nothing to hear louder.
+    gainControl.update({ visible: isAdmin && hasPresenter() && !isWatchingSelf(), gain: currentStream()?.gain });
+    audioDecodePipeline?.setStreamGain(currentStream()?.gain ?? 1);
     const presenting = isPresenting();
 
     shareButton.innerHTML = presenting
@@ -528,6 +539,7 @@ export function mountApp(options: MountAppOptions): void {
 
     audioDecodePipeline = startAudioDecodePipeline(params, mediaClock);
     audioDecodePipeline.setVolume(Number(volumeSlider.value) / 100);
+    audioDecodePipeline.setStreamGain(currentStream()?.gain ?? 1);
   }
 
   function clearCanvas(): void {

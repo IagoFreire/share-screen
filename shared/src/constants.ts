@@ -35,6 +35,13 @@ export const AUDIO_QUALITY_PRESETS: Record<AudioQualityKey, { bitrateKbps: numbe
 
 export const AUDIO_QUALITY_DEFAULT: AudioQualityKey = "high";
 
+/**
+ * Highest gain an admin may put on a broadcast for everyone (1000%): enough to rescue a
+ * presenter whose apps play very quietly. Viewers limit the result, so it gets loud but
+ * never clips.
+ */
+export const MAX_STREAM_GAIN = 10;
+
 export const VIDEO_WIDTH_DEFAULT = 1920;
 export const VIDEO_HEIGHT_DEFAULT = 1080;
 export const VIDEO_FRAMERATE_DEFAULT = 60;

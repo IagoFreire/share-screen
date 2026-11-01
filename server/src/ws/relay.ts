@@ -5,6 +5,7 @@ import {
   encodeControlMessage,
   encodeFrame,
   FrameType,
+  MAX_STREAM_GAIN,
   SLOT_PRESENTER,
   type ControlMessage,
   type LayerInfo,
@@ -580,6 +581,18 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
 
       const presenter = room.getPresenter(message.slot);
       if (presenter) send(presenter.ws, { kind: "play-alert" });
+      return;
+    }
+
+    // Admin-only, re-checked here like ending a broadcast. Stored on the broadcast and
+    // sent in the stream list, so every viewer (late joiners included) plays it louder.
+    case "set-stream-gain": {
+      if (!state.roomId || !isAdmin(state.userId)) return;
+      const room = roomManager.getRoom(state.roomId);
+      if (!room || !Number.isInteger(message.slot)) return;
+      const gain = Number(message.gain);
+      if (!Number.isFinite(gain) || gain < 0 || gain > MAX_STREAM_GAIN) return;
+      if (room.setGain(message.slot, Math.round(gain * 100) / 100)) broadcastStreams(room);
       return;
     }
 

@@ -16,6 +16,8 @@ let contextOutputLatency = 0;
 let sampleValue = 0;
 let played: Played[] = [];
 let decoders: FakeAudioDecoder[] = [];
+let gains: Array<{ gain: { value: number }; connectedTo: unknown[] }> = [];
+let compressors: Array<{ ratio: { value: number }; threshold: { value: number } }> = [];
 let lastDecodedUs = 0;
 
 class FakeAudioContext {
@@ -29,7 +31,17 @@ class FakeAudioContext {
     return contextOutputLatency;
   }
   createGain() {
-    return { gain: { value: 1 }, connect() {} };
+    const node = { gain: { value: 1 }, connectedTo: [] as unknown[], connect(target: unknown) {
+      node.connectedTo.push(target);
+    } };
+    gains.push(node);
+    return node;
+  }
+  createDynamicsCompressor() {
+    const param = () => ({ value: 0 });
+    const node = { kind: "compressor", threshold: param(), knee: param(), ratio: param(), attack: param(), release: param(), connect() {} };
+    compressors.push(node);
+    return node;
   }
   createBuffer(_channels: number, frames: number, sampleRate: number) {
     return { duration: frames / sampleRate, copyToChannel() {} };
@@ -125,6 +137,8 @@ describe("audio decode pipeline", () => {
     sampleValue = 0;
     played = [];
     decoders = [];
+    gains = [];
+    compressors = [];
     vi.stubGlobal("AudioContext", FakeAudioContext);
     vi.stubGlobal("AudioDecoder", FakeAudioDecoder);
     vi.stubGlobal("EncodedAudioChunk", class {
@@ -290,6 +304,26 @@ describe("audio decode pipeline", () => {
     pipeline.reset();
 
     expect(played.every((p) => p.end <= Math.max(p.start, ctxTime))).toBe(true);
+  });
+
+  it("plays at the viewer's volume times the gain an admin set on the broadcast", () => {
+    const pipeline = startAudioDecodePipeline({ sampleRate: 48_000, channels: 2 });
+
+    pipeline.setVolume(0.5);
+    pipeline.setStreamGain(4);
+
+    expect(gains[0]!.gain.value).toBe(2);
+    pipeline.setStreamGain(1);
+    expect(gains[0]!.gain.value).toBe(0.5);
+  });
+
+  it("limits the output, so a big gain gets loud instead of clipping", () => {
+    startAudioDecodePipeline({ sampleRate: 48_000, channels: 2 });
+
+    expect(compressors).toHaveLength(1);
+    expect(gains[0]!.connectedTo).toEqual([compressors[0]]);
+    expect(compressors[0]!.ratio.value).toBeGreaterThanOrEqual(12);
+    expect(compressors[0]!.threshold.value).toBeLessThan(0);
   });
 
   it("rebuilds a decoder that failed instead of staying silent", () => {

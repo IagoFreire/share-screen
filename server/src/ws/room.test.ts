@@ -73,6 +73,28 @@ describe("Room audiences", () => {
   });
 });
 
+describe("Room stream gain", () => {
+  it("lists no gain for a broadcast played as sent", () => {
+    const room = new Room("c1", 10);
+    room.allocateSlot(presenterSocket, "42", null);
+
+    expect(room.streams[0].gain).toBeUndefined();
+  });
+
+  it("carries an admin's gain in the stream list, and says whether it changed", () => {
+    const room = new Room("c1", 10);
+    const slot = room.allocateSlot(presenterSocket, "42", null)!;
+
+    expect(room.setGain(slot, 4)).toBe(true);
+    expect(room.setGain(slot, 4)).toBe(false);
+    expect(room.streams[0].gain).toBe(4);
+  });
+
+  it("has no gain to set on a slot nobody broadcasts on", () => {
+    expect(new Room("c1", 10).setGain(3, 2)).toBe(false);
+  });
+});
+
 describe("Room layers in use", () => {
   it("reports whether the set of layers in use actually changed", () => {
     const room = new Room("c1", 10);

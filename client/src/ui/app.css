@@ -1066,6 +1066,141 @@ body.viewer .status {
   display: none;
 }
 
+/* --- Admin gain: louder for everyone (see ui/gainControl.ts) --- */
+.gain-control {
+  position: relative;
+  line-height: normal; /* the player sets line-height: 0 */
+}
+
+.gain-btn {
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--player-tile);
+  backdrop-filter: blur(6px);
+  color: var(--player-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 120ms linear,
+    color 120ms linear;
+}
+
+.gain-btn:hover,
+.gain-btn[aria-expanded="true"] {
+  background: #404249;
+  color: #f2f3f5;
+}
+
+/* Boosted: say so at a glance, it changes what everyone hears. */
+.gain-btn.is-boosted {
+  color: #f0b232;
+}
+
+.gain-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.gain-pop {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 12px);
+  z-index: 20;
+  width: 240px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #1e1f22;
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.06);
+  color: #dbdee1;
+}
+
+.gain-pop[hidden] {
+  display: none;
+}
+
+.gain-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.gain-hint {
+  margin: 2px 0 10px;
+  color: #949ba4;
+  font-size: 12px;
+}
+
+.gain-value {
+  display: block;
+  margin-bottom: 6px;
+  color: #f2f3f5;
+  font-size: 22px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.gain-slider {
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    #f0b232 0%,
+    #f0b232 var(--fill, 10%),
+    rgba(255, 255, 255, 0.16) var(--fill, 10%),
+    rgba(255, 255, 255, 0.16) 100%
+  );
+  cursor: pointer;
+  outline: none;
+}
+
+.gain-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+.gain-slider:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.gain-presets {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.gain-preset {
+  flex: 1;
+  padding: 5px 0;
+  border: 0;
+  border-radius: 4px;
+  background: #2b2d31;
+  color: #b5bac1;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.gain-preset:hover {
+  background: #404249;
+  color: #f2f3f5;
+}
+
 /* --- Quality picker (simulcast broadcasts from the desktop app) --- */
 .quality-menu {
   position: relative;

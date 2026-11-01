@@ -116,6 +116,11 @@ export interface StreamInfo {
    * audience-changed). Picking it brings it back within a keyframe.
    */
   paused?: boolean;
+  /**
+   * Extra loudness an admin set for this broadcast, as a multiplier (1 = as sent, up to
+   * MAX_STREAM_GAIN); every viewer plays it at their own volume times this. Absent at 1.
+   */
+  gain?: number;
 }
 
 /**
@@ -282,6 +287,12 @@ export type ControlMessage =
    * it itself behind a proxy that buffers for it, so "auto" steps down on this signal.
    */
   | { kind: "report-congestion" }
+  /**
+   * Admin -> server: play the broadcast on `slot` this much louder for everyone (a quiet
+   * presenter). The relay checks the admin itself, stores it on the broadcast and sends
+   * the new stream list, so late joiners get it too. 1 is as sent; see StreamInfo.gain.
+   */
+  | { kind: "set-stream-gain"; slot: number; gain: number }
   /** Viewer -> server, and server -> presenter; `layer` (to the presenter) names the encoder. */
   | { kind: "request-keyframe"; layer?: number }
   /**

@@ -3,6 +3,7 @@ import {
   AUDIO_CONTINUITY_TOLERANCE_SECONDS,
   AUDIO_JITTER_BUFFER_SECONDS,
   AUDIO_MAX_DRIFT_SECONDS,
+  MAX_STREAM_GAIN,
 } from "@screenshare-bot/shared";
 import type { MediaClock } from "./mediaClock.js";
 
@@ -34,6 +35,8 @@ export interface AudioDecodePipeline {
   stats: () => AudioPlaybackStats;
   /** 0 (silent) to MAX_VOLUME; 1 is the broadcast as sent. */
   setVolume: (volume: number) => void;
+  /** The broadcast's admin-set gain (StreamInfo.gain), on top of the volume; 1 = as sent. */
+  setStreamGain: (gain: number) => void;
   /**
    * Silences everything scheduled and starts over on the next packet -- for a switch to
    * another broadcast, whose timestamps have nothing to do with this one's.
@@ -94,7 +97,23 @@ export function startAudioDecodePipeline(params: AudioParams, clock?: MediaClock
 
   const audioContext = new AudioContext({ sampleRate });
   const gainNode = audioContext.createGain();
-  gainNode.connect(audioContext.destination);
+  // A limiter before the speakers: an admin can boost a quiet broadcast up to 10x for
+  // everyone (StreamInfo.gain), and the louder passages of it must flatten out near
+  // full scale instead of clipping into distortion. Below the threshold it does nothing.
+  const limiter = audioContext.createDynamicsCompressor();
+  limiter.threshold.value = -1;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.25;
+  gainNode.connect(limiter);
+  limiter.connect(audioContext.destination);
+  /** The viewer's own volume, and the gain an admin set on the broadcast for everyone. */
+  let volume = 1;
+  let streamGain = 1;
+  const applyGain = () => {
+    gainNode.gain.value = volume * streamGain;
+  };
 
   // Browsers suspend new AudioContexts until a user gesture; the viewer's audio
   // pipeline starts automatically on "joined" with no click involved, so unlock
@@ -293,8 +312,13 @@ export function startAudioDecodePipeline(params: AudioParams, clock?: MediaClock
       playbackRate,
       peakDb: 20 * Math.log10(Math.max(0, ...recentPeaks.map((entry) => entry.peak))),
     }),
-    setVolume: (volume) => {
-      gainNode.gain.value = Math.min(MAX_VOLUME, Math.max(0, volume));
+    setVolume: (next) => {
+      volume = Math.min(MAX_VOLUME, Math.max(0, next));
+      applyGain();
+    },
+    setStreamGain: (next) => {
+      streamGain = Math.min(MAX_STREAM_GAIN, Math.max(0, next));
+      applyGain();
     },
     reset: () => {
       for (const entry of scheduled) entry.source.stop();

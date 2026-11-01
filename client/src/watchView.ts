@@ -27,6 +27,7 @@ import {
 } from "./ui/icons.js";
 import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } from "./ui/broadcastsPanel.js";
 import { createQualityMenu, type QualityChoice } from "./ui/qualityMenu.js";
+import { createGainControl } from "./ui/gainControl.js";
 import { createViewersMenu } from "./ui/viewersMenu.js";
 import { autoWatchSlot, isOwnStream } from "./ui/streamChoice.js";
 
@@ -155,6 +156,13 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   });
   liveButton.before(qualityMenu.element);
 
+  // Admin-only: louder for everyone watching this broadcast (see ui/gainControl.ts).
+  const gainControl = createGainControl((gain) => {
+    const stream = currentStream();
+    if (stream) wsClient.sendControl({ kind: "set-stream-gain", slot: stream.slot, gain });
+  });
+  qualityMenu.element.before(gainControl.element);
+
   // Who is in the room, beside the count it names. Lazy like the broadcast list below.
   const viewersMenu = createViewersMenu({
     requestList: () => wsClient.sendControl({ kind: "request-viewers" }),
@@ -249,6 +257,9 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   function render(): void {
     // Your own broadcast isn't decoded back with a choice of versions; hide the picker.
     qualityMenu.update(isSelf() ? undefined : currentStream()?.layers, layerChoice, currentLayer);
+    // Your own broadcast is never played back to you, so there's nothing to hear louder.
+    gainControl.update({ visible: isAdmin && isWatching() && !isSelf(), gain: currentStream()?.gain });
+    audioDecodePipeline?.setStreamGain(currentStream()?.gain ?? 1);
 
     if (streams.length > 1) {
       statusText.textContent = `${streams.length} transmissões — ${viewerCount} espectador(es).`;
@@ -529,6 +540,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
     audioDecodePipeline = startAudioDecodePipeline(params, mediaClock);
     audioDecodePipeline.setVolume(Number(volumeSlider.value) / 100);
+    audioDecodePipeline.setStreamGain(currentStream()?.gain ?? 1);
   }
 
   /** Starts the video pipeline if one isn't already running, guarding against the race
@@ -824,6 +836,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
       audioDecodePipeline = null;
       broadcastsPanel.close();
       qualityMenu.close();
+      gainControl.close();
       viewersMenu.close();
       statsOverlay.destroy();
       document.removeEventListener("fullscreenchange", onFullscreenChange);

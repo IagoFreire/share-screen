@@ -15,6 +15,8 @@ interface PresenterSlot {
   audience: Audience | null;
   /** Last "layers-in-use" told to the presenter; null until the relay first counts it. */
   layersInUse: number[] | null;
+  /** Extra loudness an admin set for everyone (see StreamInfo.gain); 1 = as sent. */
+  gain: number;
 }
 
 /**
@@ -62,7 +64,16 @@ export class Room {
         audio: presenter.audioParams,
         ...(presenter.layers ? { layers: presenter.layers } : {}),
         ...(this.isPaused(slot) ? { paused: true } : {}),
+        ...(presenter.gain !== 1 ? { gain: presenter.gain } : {}),
       }));
+  }
+
+  /** Sets the broadcast's gain for everyone. Returns false when nothing changed. */
+  setGain(slot: number, gain: number): boolean {
+    const presenter = this.presenters.get(slot);
+    if (!presenter || presenter.gain === gain) return false;
+    this.presenters.set(slot, { ...presenter, gain });
+    return true;
   }
 
   /** True once the broadcast on `slot` is known to send nothing: no sound, no picture. */
@@ -130,7 +141,7 @@ export class Room {
   ): number | null {
     // The audience starts unknown either way: a re-registered presenter restarts its
     // encoders, so it has to be told again whether anyone is watching.
-    const fresh = { ws, presenterId, audioParams, layers, audience: null, layersInUse: null };
+    const fresh = { ws, presenterId, audioParams, layers, audience: null, layersInUse: null, gain: 1 };
     const existing = this.slotOf(ws);
     if (existing !== null) {
       this.presenters.set(existing, fresh);
