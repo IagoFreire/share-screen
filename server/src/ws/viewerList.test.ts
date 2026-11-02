@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { countSpectators, listRoomPeople, type ViewerConnection } from "./viewerList.js";
 
 function connection(overrides: Partial<ViewerConnection> = {}): ViewerConnection {
-  return { userId: "7", selectedSlot: 0, isPaused: false, ...overrides };
+  return { userId: "7", selectedSlot: 0, isPaused: false, hidden: false, ...overrides };
 }
 
 describe("listRoomPeople", () => {
@@ -60,5 +60,17 @@ describe("countSpectators", () => {
 
   it("counts anonymous connections each", () => {
     expect(countSpectators([connection({ userId: null }), connection({ userId: null })], ["9"])).toBe(2);
+  });
+
+  it("does not count an admin watching hidden", () => {
+    expect(countSpectators([connection({ userId: "1", hidden: true }), connection({ userId: "2" })], [])).toBe(1);
+  });
+});
+
+describe("listRoomPeople, hidden", () => {
+  it("leaves out an admin watching hidden", () => {
+    const people = listRoomPeople([connection({ userId: "1", hidden: true }), connection({ userId: "2" })]);
+
+    expect(people).toEqual([{ userId: "2", slot: 0 }]);
   });
 });

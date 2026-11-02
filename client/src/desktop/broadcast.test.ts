@@ -122,13 +122,22 @@ describe("desktop broadcast", () => {
     const { goLive, handlers, audiences } = setup();
     await goLive();
 
-    handlers().onControl({ kind: "audience-changed", watchers: 3, videoWatchers: 2 });
-    handlers().onControl({ kind: "audience-changed", watchers: 0, videoWatchers: 0 });
+    handlers().onControl({ kind: "audience-changed", watchers: 3, videoWatchers: 2, shownWatchers: 3, shownVideoWatchers: 2 });
+    handlers().onControl({ kind: "audience-changed", watchers: 0, videoWatchers: 0, shownWatchers: 0, shownVideoWatchers: 0 });
 
     expect(audiences).toEqual([
       { watchers: 3, videoWatchers: 2 },
       { watchers: 0, videoWatchers: 0 },
     ]);
+  });
+
+  it("never counts an admin watching hidden", async () => {
+    const { goLive, handlers, audiences } = setup();
+    await goLive();
+
+    handlers().onControl({ kind: "audience-changed", watchers: 2, videoWatchers: 2, shownWatchers: 1, shownVideoWatchers: 1 });
+
+    expect(audiences).toEqual([{ watchers: 1, videoWatchers: 1 }]);
   });
 
   it("stopping on purpose is not reported as an interruption", async () => {

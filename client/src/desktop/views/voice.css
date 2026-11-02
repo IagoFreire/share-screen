@@ -36,6 +36,22 @@
   color: var(--desk-text);
 }
 
+/* `hidden` loses to the display rules above without this. */
+.vc-rooms[hidden],
+.vc-dock[hidden],
+.vc-add[hidden] {
+  display: none;
+}
+
+.vc-power {
+  margin-right: 6px;
+}
+
+/* Off for everyone: the admin's switch reads as a warning until turned back on. */
+.vc-power.is-off {
+  color: var(--desk-red);
+}
+
 .vc-add svg {
   width: 18px;
   height: 18px;
@@ -66,7 +82,46 @@
 }
 
 .vc-room {
+  position: relative;
   margin-bottom: 2px;
+}
+
+/* Admins: over the room's row, at its right edge, only while it's pointed at or focused. */
+.vc-room-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--desk-text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--desk-fast) linear, color var(--desk-fast) linear;
+}
+
+.vc-room:hover > .vc-room-delete,
+.vc-room-delete:focus-visible {
+  opacity: 1;
+}
+
+.vc-room-delete:hover {
+  color: var(--desk-red);
+}
+
+.vc-room-delete svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Room names stop short of the delete button rather than running under it. */
+.vc-room:has(> .vc-room-delete) > .vc-room-head {
+  padding-right: 32px;
 }
 
 .vc-room-head {

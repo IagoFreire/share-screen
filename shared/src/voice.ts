@@ -42,12 +42,20 @@ export type VoiceClientMessage =
   | { kind: "create-room"; name: string }
   | { kind: "join-room"; roomId: string }
   | { kind: "leave-room" }
-  | { kind: "set-state"; muted: boolean; deafened: boolean };
+  | { kind: "set-state"; muted: boolean; deafened: boolean }
+  /** Admin only: closes a room, taking everyone in it out. The server checks the admin itself. */
+  | { kind: "delete-room"; roomId: string }
+  /** Admin only: turns voice rooms on or off for everyone; off closes every room. */
+  | { kind: "set-enabled"; enabled: boolean };
 
 export type VoiceServerMessage =
-  | { kind: "welcome"; userId: string }
-  /** Every room, sent to everyone on any change -- there are few and they are small. */
-  | { kind: "rooms"; rooms: VoiceRoomInfo[] }
+  /** `isAdmin` (ADMIN_USER_IDS) only says whether to offer deleting rooms. */
+  | { kind: "welcome"; userId: string; isAdmin: boolean }
+  /**
+   * Every room, sent to everyone on any change -- there are few and they are small.
+   * `enabled` is false while voice rooms are off: the default, until an admin turns them on (set-enabled).
+   */
+  | { kind: "rooms"; rooms: VoiceRoomInfo[]; enabled: boolean }
   /** Where this connection is now; null when it isn't in a room (left, or joined elsewhere). */
   | { kind: "in-room"; roomId: string | null; slot: number | null }
   | { kind: "error"; message: string; code?: "invalid-session" };

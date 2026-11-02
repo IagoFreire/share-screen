@@ -191,9 +191,9 @@ export async function startDesktopBroadcast(
   }
 
   onControl = (message) => {
-    // The session pauses itself on it; the count is still ours to show.
+    // The session pauses itself on the real counts; we show the ones without hidden admins.
     if (message.kind === "audience-changed") {
-      options.onAudience({ watchers: message.watchers, videoWatchers: message.videoWatchers });
+      options.onAudience({ watchers: message.shownWatchers, videoWatchers: message.shownVideoWatchers });
     }
     if (session.handleControl(message)) {
       if (message.kind === "presenting-started" && audioStatus) {

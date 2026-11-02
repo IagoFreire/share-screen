@@ -18,10 +18,12 @@ import {
   ICON_END_STREAM,
   ICON_FULLSCREEN_ENTER,
   ICON_FULLSCREEN_EXIT,
+  ICON_HIDDEN,
   ICON_IDLE,
   ICON_LIST,
   ICON_MUTED,
   ICON_REFRESH,
+  ICON_SEEN,
   ICON_VIDEO,
   ICON_VIDEO_OFF,
   ICON_VOLUME,
@@ -30,6 +32,7 @@ import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } fr
 import { createQualityMenu, type QualityChoice } from "./ui/qualityMenu.js";
 import { createGainControl } from "./ui/gainControl.js";
 import { createViewersMenu } from "./ui/viewersMenu.js";
+import { browserHiddenWatch } from "./ui/hiddenWatch.js";
 import { autoWatchSlot, isOwnStream } from "./ui/streamChoice.js";
 
 /** Lockout after the "ao vivo" button -- see App.ts. */
@@ -118,6 +121,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
           <div class="spacer"></div>
           <button id="live-btn" class="icon-btn" type="button" title="Atualizar: voltar ao ao vivo" style="display: none">${ICON_REFRESH}</button>
           <button id="broadcasts-btn" class="icon-btn" type="button" title="Escolher transmissão" style="display: none">${ICON_LIST}</button>
+          <button id="hide-btn" class="icon-btn" type="button" style="display: none"></button>
           <button id="alert-btn" class="icon-btn" type="button" title="Tocar um alerta para quem está transmitindo" style="display: none">${ICON_BELL}</button>
           <button id="end-stream-btn" class="icon-btn is-danger" type="button" title="Encerrar esta transmissão" style="display: none">${ICON_END_STREAM}</button>
           <button id="video-toggle-btn" class="icon-btn" type="button" title="Desativar vídeo (somente áudio)">${ICON_VIDEO}</button>
@@ -132,6 +136,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
   const player = root.querySelector<HTMLDivElement>("#player")!;
   const statusText = root.querySelector<HTMLSpanElement>("#status-text")!;
+  const hideButton = root.querySelector<HTMLButtonElement>("#hide-btn")!;
   const alertButton = root.querySelector<HTMLButtonElement>("#alert-btn")!;
   const endStreamButton = root.querySelector<HTMLButtonElement>("#end-stream-btn")!;
   const videoToggleButton = root.querySelector<HTMLButtonElement>("#video-toggle-btn")!;
@@ -240,6 +245,8 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   let videoDisabled = false;
   /** Set by the server at join: may this user end other people's broadcasts? */
   let isAdmin = false;
+  /** Admins: "assistir oculto", out of the viewer list and every count (see set-hidden). */
+  const hiddenWatch = browserHiddenWatch();
   /**
    * Bumped by every call that decides what the video pipeline should be (join, resume,
    * toggle). `startVideoDecodePipeline()` is async (it awaits `isConfigSupported()`), so
@@ -361,6 +368,16 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     alertButton.style.display = canModerateStream ? "" : "none";
     endStreamButton.style.display = canModerateStream ? "" : "none";
 
+    // Admin-only, whether watching or not: someone in the room shows up in its list either way.
+    const hidden = hiddenWatch.isHidden();
+    hideButton.style.display = isAdmin ? "" : "none";
+    hideButton.innerHTML = hidden ? ICON_HIDDEN : ICON_SEEN;
+    hideButton.classList.toggle("is-off", hidden);
+    hideButton.setAttribute("aria-pressed", hidden ? "true" : "false");
+    hideButton.title = hidden
+      ? "Assistindo oculto: ninguém vê que você está aqui. Clique para aparecer."
+      : "Assistir oculto: sumir da lista e da contagem de espectadores";
+
     videoToggleButton.disabled = isPausedHere || !isWatching();
     videoToggleButton.innerHTML = videoDisabled ? ICON_VIDEO_OFF : ICON_VIDEO;
     videoToggleButton.classList.toggle("is-off", videoDisabled);
@@ -476,8 +493,17 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
       guildId,
       session: options.session ?? null,
       watchNothing: joinWatchesNothing,
+      // Sent with every join, so a hidden admin is never counted even for a moment.
+      hidden: hiddenWatch.isHidden(),
     });
   }
+
+  hideButton.addEventListener("click", () => {
+    const hidden = !hiddenWatch.isHidden();
+    hiddenWatch.setHidden(hidden);
+    wsClient.sendControl({ kind: "set-hidden", hidden });
+    render();
+  });
 
   /** Goes back to the room a refused hop left -- see App.ts's returnFromFailedHop. */
   function returnFromFailedHop(): void {

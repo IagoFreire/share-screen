@@ -1,7 +1,11 @@
 import type { WebSocket } from "ws";
 import type { AppAudioStatus, AudioParams, LayerInfo, StreamInfo } from "@screenshare-bot/shared";
 import { MAX_PRESENTERS_PER_ROOM } from "@screenshare-bot/shared";
-import type { Audience } from "./audience.js";
+import type { Audience, PresenterAudience } from "./audience.js";
+
+function sameAudience(a: Audience, b: Audience): boolean {
+  return a.watchers === b.watchers && a.videoWatchers === b.videoWatchers;
+}
 
 interface PresenterSlot {
   ws: WebSocket;
@@ -12,7 +16,7 @@ interface PresenterSlot {
   /** Simulcast versions this presenter sends; undefined for single-version senders. */
   layers: LayerInfo[] | undefined;
   /** Last audience told to the presenter; null until the relay first counts it. */
-  audience: Audience | null;
+  audience: PresenterAudience | null;
   /** Last "layers-in-use" told to the presenter; null until the relay first counts it. */
   layersInUse: number[] | null;
   /** Extra loudness an admin set for everyone (see StreamInfo.gain); 1 = as sent. */
@@ -90,19 +94,20 @@ export class Room {
 
   /** True once the broadcast on `slot` is known to send nothing: no sound, no picture. */
   isPaused(slot: number): boolean {
-    const audience = this.presenters.get(slot)?.audience;
-    return audience?.watchers === 0 && audience.videoWatchers === 0;
+    // From what the presenter is shown: an admin watching hidden mustn't un-pause it for everyone to see.
+    const shown = this.presenters.get(slot)?.audience?.shown;
+    return shown?.watchers === 0 && shown.videoWatchers === 0;
   }
 
   /**
    * Records who receives the broadcast on `slot`. Returns false when that is what was
    * already recorded, so the presenter is only told about actual changes.
    */
-  setAudience(slot: number, audience: Audience): boolean {
+  setAudience(slot: number, audience: PresenterAudience): boolean {
     const presenter = this.presenters.get(slot);
     if (!presenter) return false;
     const previous = presenter.audience;
-    if (previous?.watchers === audience.watchers && previous.videoWatchers === audience.videoWatchers) return false;
+    if (previous && sameAudience(previous, audience) && sameAudience(previous.shown, audience.shown)) return false;
     this.presenters.set(slot, { ...presenter, audience });
     return true;
   }

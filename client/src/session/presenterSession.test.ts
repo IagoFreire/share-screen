@@ -317,7 +317,7 @@ describe("presenter session audience", () => {
     const { session, frames, emitVideo, emitAudio, videoPauses } = setup();
     await session.start(QUALITY);
 
-    expect(session.handleControl({ kind: "audience-changed", watchers: 0, videoWatchers: 0 })).toBe(true);
+    expect(session.handleControl({ kind: "audience-changed", watchers: 0, videoWatchers: 0, shownWatchers: 0, shownVideoWatchers: 0 })).toBe(true);
     emitVideo(fakeChunk([1], 1000, "key"));
     emitAudio(fakeChunk([2], 1000));
 
@@ -328,9 +328,9 @@ describe("presenter session audience", () => {
   it("starts sending again once someone watches", async () => {
     const { session, frames, emitVideo, videoPauses } = setup();
     await session.start(QUALITY);
-    session.handleControl({ kind: "audience-changed", watchers: 0, videoWatchers: 0 });
+    session.handleControl({ kind: "audience-changed", watchers: 0, videoWatchers: 0, shownWatchers: 0, shownVideoWatchers: 0 });
 
-    session.handleControl({ kind: "audience-changed", watchers: 1, videoWatchers: 1 });
+    session.handleControl({ kind: "audience-changed", watchers: 1, videoWatchers: 1, shownWatchers: 1, shownVideoWatchers: 1 });
     emitVideo(fakeChunk([1], 1000, "key"));
 
     expect(videoPauses).toEqual([true, false]);
@@ -341,7 +341,7 @@ describe("presenter session audience", () => {
     const { session, frames, emitVideo, emitAudio, videoPauses } = setup();
     await session.start(QUALITY);
 
-    session.handleControl({ kind: "audience-changed", watchers: 2, videoWatchers: 0 });
+    session.handleControl({ kind: "audience-changed", watchers: 2, videoWatchers: 0, shownWatchers: 2, shownVideoWatchers: 0 });
     emitVideo(fakeChunk([1], 1000, "key"));
     emitAudio(fakeChunk([2], 1000));
 
@@ -353,7 +353,7 @@ describe("presenter session audience", () => {
     const { session, frames, emitVideo, emitAudio, videoPauses } = setup();
     await session.start(QUALITY);
 
-    session.handleControl({ kind: "audience-changed", watchers: 0, videoWatchers: 1 });
+    session.handleControl({ kind: "audience-changed", watchers: 0, videoWatchers: 1, shownWatchers: 0, shownVideoWatchers: 1 });
     emitVideo(fakeChunk([1], 1000, "key"));
     emitAudio(fakeChunk([2], 1000));
 
@@ -365,8 +365,8 @@ describe("presenter session audience", () => {
     const { session, videoPauses } = setup();
     await session.start(QUALITY);
 
-    session.handleControl({ kind: "audience-changed", watchers: 1, videoWatchers: 1 });
-    session.handleControl({ kind: "audience-changed", watchers: 3, videoWatchers: 3 });
+    session.handleControl({ kind: "audience-changed", watchers: 1, videoWatchers: 1, shownWatchers: 1, shownVideoWatchers: 1 });
+    session.handleControl({ kind: "audience-changed", watchers: 3, videoWatchers: 3, shownWatchers: 3, shownVideoWatchers: 3 });
 
     expect(videoPauses).toEqual([]);
   });
@@ -441,7 +441,7 @@ describe("presenter session simulcast", () => {
     await session.start(LAYERS[0], LAYERS);
     session.handleControl({ kind: "layers-in-use", layers: [0] });
 
-    session.handleControl({ kind: "audience-changed", watchers: 1, videoWatchers: 0 });
+    session.handleControl({ kind: "audience-changed", watchers: 1, videoWatchers: 0, shownWatchers: 1, shownVideoWatchers: 0 });
 
     expect(pauses).toEqual([[true], [true], [true]]);
   });

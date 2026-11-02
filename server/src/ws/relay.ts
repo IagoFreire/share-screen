@@ -18,7 +18,7 @@ import { isUserInVoiceChannel } from "../auth/verifyMember.js";
 import { verifySessionToken } from "../auth/session.js";
 import { pausesSiblingConnections, resolveJoinIdentity, startsWatchingNothing } from "./joinIdentity.js";
 import { createAutoLayer, type AutoLayer } from "./autoLayer.js";
-import { countAudience, videoLayersInUse } from "./audience.js";
+import { presenterAudience, videoLayersInUse } from "./audience.js";
 import { createKeyframeThrottle } from "./keyframeThrottle.js";
 import { sanitizeAudioStatus } from "./audioStatus.js";
 import { countSpectators, listRoomPeople } from "./viewerList.js";
@@ -71,6 +71,8 @@ interface ConnectionState {
   /** A presenter watching their own broadcast because they opened it on purpose (see
    *  select-stream `preview`); its picture keeps flowing for them. */
   ownPreview: boolean;
+  /** An admin watching hidden (set-hidden): out of every list and count, and of what presenters are shown. */
+  hidden: boolean;
   /** Which simulcast version this viewer asked for; "auto" lets autoLayer.ts decide. */
   layerChoice: number | "auto";
   /** The automatic choice for the watched broadcast, rebuilt when its layer count changes. */
@@ -93,6 +95,7 @@ function getState(ws: WebSocket): ConnectionState {
       isPaused: false,
       videoDisabled: false,
       ownPreview: false,
+      hidden: false,
       layerChoice: "auto",
       autoLayer: null,
       autoLayerCount: 0,
@@ -231,9 +234,17 @@ function syncAudiences(room: Room): boolean {
   for (const { slot, presenterId, layers } of room.streams) {
     const presenter = room.getPresenter(slot);
     const wasPaused = room.isPaused(slot);
-    const audience = countAudience(viewers, slot, presenterId);
+    const audience = presenterAudience(viewers, slot, presenterId);
     if (room.setAudience(slot, audience)) {
-      if (presenter) send(presenter.ws, { kind: "audience-changed", ...audience });
+      if (presenter) {
+        send(presenter.ws, {
+          kind: "audience-changed",
+          watchers: audience.watchers,
+          videoWatchers: audience.videoWatchers,
+          shownWatchers: audience.shown.watchers,
+          shownVideoWatchers: audience.shown.videoWatchers,
+        });
+      }
       if (room.isPaused(slot) !== wasPaused) pausedChanged = true;
     }
 
@@ -448,6 +459,8 @@ async function handleJoin(
   state.roomId = message.roomId;
   state.userId = userId;
   state.isVerified = identity.verified;
+  // Before anything is counted, so a hidden admin never shows up even for a moment.
+  state.hidden = message.hidden === true && isAdmin(userId);
   // Recorded so the admin list can name the server a room belongs to. Only set once:
   // it never changes for a given channel, and later joins may omit it.
   room.guildId ??= message.guildId;
@@ -676,6 +689,17 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
     // Audio-only toggle: doesn't touch room membership or the pause mechanism, just
     // which frame types get forwarded to this specific connection (see handleMessage).
     // It does change whether the presenter still needs to encode video at all.
+    // Admin-only, re-checked here like ending a broadcast: anyone else just stays seen.
+    case "set-hidden": {
+      if (!isAdmin(state.userId)) return;
+      state.hidden = message.hidden === true;
+      const room = state.roomId ? roomManager.getRoom(state.roomId) : undefined;
+      if (!room) return;
+      announceViewerCount(room);
+      refreshAudiences(room);
+      return;
+    }
+
     case "set-video-enabled": {
       state.videoDisabled = !message.enabled;
       const room = state.roomId ? roomManager.getRoom(state.roomId) : undefined;

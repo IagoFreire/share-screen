@@ -209,12 +209,12 @@ function main(): void {
   session.onEnded(() => resetAfterStop());
 
   function handleControl(message: ControlMessage): void {
-    // The session pauses itself on it; the status line is ours.
+    // The session pauses itself on the real count; the status line shows the one without hidden admins.
     if (message.kind === "audience-changed" && session.isPresenting) {
       setStatus(
-        message.watchers === 0
+        message.shownWatchers === 0
           ? "Pausado: ninguém está assistindo. Volta sozinho quando alguém abrir."
-          : `Compartilhando -- ${message.watchers} assistindo.`,
+          : `Compartilhando -- ${message.shownWatchers} assistindo.`,
       );
     }
     if (session.handleControl(message)) return;

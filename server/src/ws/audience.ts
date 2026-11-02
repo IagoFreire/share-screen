@@ -15,6 +15,8 @@ export interface ViewerSelection {
   videoDisabled: boolean;
   /** The presenter opened their own broadcast on purpose (select-stream `preview`). */
   ownPreview: boolean;
+  /** An admin watching hidden (see set-hidden): receives it, but its presenter isn't told. */
+  hidden: boolean;
 }
 
 export interface Audience {
@@ -44,6 +46,30 @@ export function countAudience(viewers: Iterable<ViewerSelection>, slot: number, 
     if (!viewer.videoDisabled) videoWatchers += 1;
   }
   return { watchers, videoWatchers };
+}
+
+/**
+ * A broadcast's audience as its presenter hears of it: the real counts, which what it
+ * sends follows, and `shown`, the same without admins watching hidden -- all that its
+ * presenter (and the stream list's `paused`) may reveal.
+ */
+export interface PresenterAudience extends Audience {
+  shown: Audience;
+}
+
+export function presenterAudience(
+  viewers: readonly ViewerSelection[],
+  slot: number,
+  presenterId: string | null,
+): PresenterAudience {
+  return {
+    ...countAudience(viewers, slot, presenterId),
+    shown: countAudience(
+      viewers.filter((viewer) => !viewer.hidden),
+      slot,
+      presenterId,
+    ),
+  };
 }
 
 /** Whether `viewer` receives the picture of the broadcast on `slot` (see countAudience). */

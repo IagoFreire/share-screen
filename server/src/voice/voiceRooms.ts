@@ -45,10 +45,28 @@ function cleanName(raw: string): string {
     .slice(0, VOICE_ROOM_NAME_MAX);
 }
 
+const DISABLED = "As salas de voz estão desativadas.";
+
 export class VoiceRooms<C> {
   private readonly rooms: Array<Room<C>> = [];
+  /** Off until an admin turns voice rooms on for everyone; while off, none exist and none can be made. */
+  private isEnabled = false;
+
+  get enabled(): boolean {
+    return this.isEnabled;
+  }
+
+  /** Turns voice rooms on or off; turning them off closes every room. Returns who was in one. */
+  setEnabled(enabled: boolean): C[] {
+    this.isEnabled = enabled;
+    if (enabled) return [];
+    const evicted = this.rooms.flatMap((room) => room.seats.map((seat) => seat.conn));
+    this.rooms.splice(0);
+    return evicted;
+  }
 
   create(rawName: string, conn: C, profile: MemberProfile): SeatResult<C> {
+    if (!this.isEnabled) return { ok: false, error: DISABLED };
     const name = cleanName(rawName);
     if (!name) return { ok: false, error: "Dê um nome para a sala." };
     if (this.rooms.length >= VOICE_MAX_ROOMS) return { ok: false, error: "Já tem salas demais abertas agora." };
@@ -59,6 +77,7 @@ export class VoiceRooms<C> {
   }
 
   join(roomId: string, conn: C, profile: MemberProfile): SeatResult<C> {
+    if (!this.isEnabled) return { ok: false, error: DISABLED };
     const room = this.rooms.find((candidate) => candidate.id === roomId);
     if (!room) return { ok: false, error: "Essa sala não existe mais." };
     const alreadyHere = room.seats.some((seat) => seat.conn === conn);
@@ -72,6 +91,14 @@ export class VoiceRooms<C> {
     if (!room) return;
     room.seats = room.seats.filter((seat) => seat.conn !== conn);
     if (room.seats.length === 0) this.rooms.splice(this.rooms.indexOf(room), 1);
+  }
+
+  /** Deletes a room with everyone in it (an admin closing it); returns who was there, or null if it's gone. */
+  remove(roomId: string): C[] | null {
+    const index = this.rooms.findIndex((room) => room.id === roomId);
+    if (index === -1) return null;
+    const [room] = this.rooms.splice(index, 1);
+    return room.seats.map((seat) => seat.conn);
   }
 
   setState(conn: C, state: { muted: boolean; deafened: boolean }): void {

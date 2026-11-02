@@ -27,6 +27,8 @@ const ICONS = {
   chevron: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 14.5l5-5 5 5z"/></svg>`,
   plus: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>`,
   wave: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 10h2v4H3zm4-3h2v10H7zm4-4h2v18h-2zm4 4h2v10h-2zm4 3h2v4h-2z"/></svg>`,
+  power: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11 3h2v10h-2zm5.56 2.44-1.45 1.45A5.97 5.97 0 0 1 18 12a6 6 0 0 1-12 0c0-2.17 1.16-4.06 2.88-5.12L7.44 5.44A7.96 7.96 0 0 0 4 12a8 8 0 0 0 16 0c0-2.72-1.36-5.12-3.44-6.56z"/></svg>`,
+  trash: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>`,
   speaker: `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.47 4.47 0 0 0 2.5-4z"/></svg>`,
 } as const;
 
@@ -71,6 +73,28 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
     h("small", { class: "vc-hint" }, "Enter cria e entra · Esc cancela"),
   );
   const roomList = h("div");
+  const addButton = h(
+    "button",
+    {
+      class: "vc-add",
+      type: "button",
+      title: "Criar sala",
+      "aria-label": "Criar sala",
+      onClick: () => setCreating(!creating),
+    },
+    icon(ICONS.plus),
+  );
+  // Admins only: voice rooms on or off for everyone.
+  const powerButton = h("button", {
+    class: "vc-add vc-power",
+    type: "button",
+    hidden: true,
+    onClick: () => {
+      const { enabled } = session.state();
+      if (enabled && !window.confirm("Desativar as salas de voz para todos? Todas as salas abertas serão fechadas.")) return;
+      session.setEnabled(!enabled);
+    },
+  });
   const roomsSection = h(
     "section",
     { class: "vc-rooms", "aria-label": "Salas de voz" },
@@ -78,17 +102,8 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
       "div",
       { class: "vc-rooms-head" },
       h("span", { class: "vc-rooms-title" }, "Salas de voz"),
-      h(
-        "button",
-        {
-          class: "vc-add",
-          type: "button",
-          title: "Criar sala",
-          "aria-label": "Criar sala",
-          onClick: () => setCreating(!creating),
-        },
-        icon(ICONS.plus),
-      ),
+      powerButton,
+      addButton,
     ),
     createBox,
     roomList,
@@ -140,6 +155,26 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
     return row;
   }
 
+  /** Admins only: closes the room for everyone in it, after asking. */
+  function deleteButton(room: VoiceRoomInfo): HTMLElement {
+    const label = `Excluir ${room.name}`;
+    return h(
+      "button",
+      {
+        class: "vc-room-delete",
+        type: "button",
+        title: label,
+        "aria-label": label,
+        onClick: () => {
+          const people = room.members.length;
+          const who = people === 0 ? "" : people === 1 ? " Quem está nela sai da sala." : ` As ${people} pessoas nela saem da sala.`;
+          if (window.confirm(`Excluir a sala "${room.name}"?${who}`)) session.deleteRoom(room.id);
+        },
+      },
+      icon(ICONS.trash),
+    );
+  }
+
   function roomRow(room: VoiceRoomInfo, here: boolean): HTMLElement {
     return h(
       "div",
@@ -158,14 +193,47 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
         icon(ICONS.speaker, "vc-room-icon"),
         h("span", { class: "vc-room-name" }, room.name),
       ),
+      session.state().isAdmin ? deleteButton(room) : null,
       room.members.length > 0
         ? h("div", { class: "vc-members" }, ...room.members.map((member) => memberRow(member, here)))
         : null,
     );
   }
 
+  /**
+   * Turned off by an admin, voice rooms vanish for everyone else, dock included. The
+   * admin keeps the section, to turn them back on, with a note that only they see it.
+   */
+  function renderSection(): void {
+    const { enabled, isAdmin } = session.state();
+    roomsSection.hidden = !enabled && !isAdmin;
+    dock.hidden = !enabled;
+    addButton.hidden = !enabled;
+    if (!enabled && creating) {
+      creating = false;
+      createBox.hidden = true;
+    }
+    if (!enabled && popover) setPopover(null);
+
+    powerButton.hidden = !isAdmin;
+    const label = enabled ? "Desativar salas de voz para todos" : "Ativar salas de voz para todos";
+    powerButton.title = label;
+    powerButton.setAttribute("aria-label", label);
+    powerButton.setAttribute("aria-pressed", enabled ? "true" : "false");
+    powerButton.classList.toggle("is-off", !enabled);
+    powerButton.replaceChildren(icon(ICONS.power));
+  }
+
   function renderRooms(): void {
     const state = session.state();
+    if (!state.enabled) {
+      fill(
+        roomList,
+        h("p", { class: "vc-empty" }, "Desativadas para todos. Só admins veem esta seção."),
+        state.error ? h("p", { class: "vc-error", role: "alert" }, state.error) : null,
+      );
+      return;
+    }
     // In the server's order, like Discord's channels: joining one doesn't move it.
     fill(
       roomList,
@@ -281,6 +349,7 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
   }
 
   function render(): void {
+    renderSection();
     renderRooms();
     renderDock();
   }

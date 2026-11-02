@@ -33,13 +33,27 @@ function send(ws: WebSocket, message: VoiceServerMessage): void {
 }
 
 function broadcastRooms(): void {
-  const message = encodeVoiceControl({ kind: "rooms", rooms: rooms.list() });
+  const message = encodeVoiceControl({ kind: "rooms", rooms: rooms.list(), enabled: rooms.enabled });
   for (const ws of profiles.keys()) if (ws.readyState === ws.OPEN) ws.send(message);
 }
 
 function tellSeat(ws: WebSocket): void {
   const seat = rooms.roomOf(ws);
   send(ws, { kind: "in-room", roomId: seat?.roomId ?? null, slot: seat?.slot ?? null });
+}
+
+/** Same list as the relay's: these users may close anyone's room. */
+function isAdmin(userId: string): boolean {
+  return config.adminUserIds.includes(userId);
+}
+
+/** Tells people an admin took out of their room where they are now, and why; then everyone the new list. */
+function evict(members: WebSocket[], admin: WebSocket, why: string): void {
+  for (const member of members) {
+    tellSeat(member);
+    if (member !== admin) send(member, { kind: "error", message: why });
+  }
+  broadcastRooms();
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -60,8 +74,8 @@ function signIn(ws: WebSocket, message: Record<string, unknown>): void {
   const avatarUrl =
     typeof message.avatarUrl === "string" && message.avatarUrl.startsWith(AVATAR_PREFIX) ? message.avatarUrl : null;
   profiles.set(ws, { userId, name: name || "Alguém", avatarUrl });
-  send(ws, { kind: "welcome", userId });
-  send(ws, { kind: "rooms", rooms: rooms.list() });
+  send(ws, { kind: "welcome", userId, isAdmin: isAdmin(userId) });
+  send(ws, { kind: "rooms", rooms: rooms.list(), enabled: rooms.enabled });
 }
 
 function handleControl(ws: WebSocket, raw: unknown): void {
@@ -100,6 +114,22 @@ function handleControl(ws: WebSocket, raw: unknown): void {
       rooms.setState(ws, { muted: message.muted === true, deafened: message.deafened === true });
       broadcastRooms();
       return;
+    case "delete-room": {
+      // Re-checked here: the client's isAdmin only decides whether to show the button.
+      if (!isAdmin(profile.userId)) return;
+      const evicted = rooms.remove(typeof message.roomId === "string" ? message.roomId : "");
+      if (!evicted) return;
+      evict(evicted, ws, "Um admin fechou a sala.");
+      return;
+    }
+    case "set-enabled": {
+      // Re-checked here like delete-room; off closes every room for everyone.
+      if (!isAdmin(profile.userId)) return;
+      const enabled = message.enabled === true;
+      if (enabled === rooms.enabled) return;
+      evict(rooms.setEnabled(enabled), ws, "Um admin desativou as salas de voz.");
+      return;
+    }
     default:
       return;
   }

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { countAudience, videoLayersInUse, type ViewerSelection } from "./audience.js";
+import { countAudience, presenterAudience, videoLayersInUse, type ViewerSelection } from "./audience.js";
 
 function viewer(overrides: Partial<ViewerSelection> = {}): ViewerSelection {
-  return { userId: "7", selectedSlot: 0, isPaused: false, videoDisabled: false, ownPreview: false, ...overrides };
+  return { userId: "7", selectedSlot: 0, isPaused: false, videoDisabled: false, ownPreview: false, hidden: false, ...overrides };
 }
 
 describe("countAudience", () => {
@@ -68,5 +68,27 @@ describe("videoLayersInUse", () => {
 
   it("keeps the layer of a preview the presenter opened on purpose", () => {
     expect(videoLayersInUse([{ ...viewer({ userId: "42", ownPreview: true }), layer: 1 }], 0, "42")).toEqual([1]);
+  });
+});
+
+describe("presenterAudience", () => {
+  it("keeps sending to an admin watching hidden but shows the presenter nobody", () => {
+    const viewers = [viewer({ userId: "1", hidden: true })];
+
+    expect(presenterAudience(viewers, 0, "42")).toEqual({
+      watchers: 1,
+      videoWatchers: 1,
+      shown: { watchers: 0, videoWatchers: 0 },
+    });
+  });
+
+  it("shows the presenter everyone else watching", () => {
+    const viewers = [viewer({ userId: "1", hidden: true }), viewer({ userId: "2" }), viewer({ userId: "3", videoDisabled: true })];
+
+    expect(presenterAudience(viewers, 0, "42")).toEqual({
+      watchers: 3,
+      videoWatchers: 2,
+      shown: { watchers: 2, videoWatchers: 1 },
+    });
   });
 });

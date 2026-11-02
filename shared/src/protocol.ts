@@ -205,7 +205,8 @@ export type ControlMessage =
    * `presenterOnly` marks a connection that only broadcasts (the desktop app's capture
    * side), so it doesn't pause the same user's player connection. It also watches
    * nothing, as does a join with `watchNothing` (a viewer who left the live before
-   * reconnecting); any other join starts on the lowest live broadcast.
+   * reconnecting); any other join starts on the lowest live broadcast. `hidden` joins
+   * as set-hidden would, and is ignored the same way for anyone but an admin.
    */
   | {
       kind: "join";
@@ -215,7 +216,14 @@ export type ControlMessage =
       session?: string | null;
       presenterOnly?: boolean;
       watchNothing?: boolean;
+      hidden?: boolean;
     }
+  /**
+   * Admin -> server: watch without being seen. A hidden connection is left out of the
+   * viewer list and every count, and presenters aren't told about it (audience-changed's
+   * `shown*`), though it still receives everything. The relay checks the admin itself.
+   */
+  | { kind: "set-hidden"; hidden: boolean }
   | {
       kind: "joined";
       roomId: string;
@@ -287,8 +295,17 @@ export type ControlMessage =
    * own preview when they opened it on purpose). With no watchers the presenter stops
    * sending audio, and with no video watchers it stops the video -- upload nobody would
    * hear or see. Sent on start and whenever either number changes.
+   *
+   * `shownWatchers` and `shownVideoWatchers` are the same counts without admins watching
+   * hidden (set-hidden): what the presenter's UI shows. Sending follows the real ones.
    */
-  | { kind: "audience-changed"; watchers: number; videoWatchers: number }
+  | {
+      kind: "audience-changed";
+      watchers: number;
+      videoWatchers: number;
+      shownWatchers: number;
+      shownVideoWatchers: number;
+    }
   /**
    * Server -> a simulcast presenter: the layers some viewer receives right now. The
    * others are paused, so a broadcast whose viewers all sit on one version doesn't spend

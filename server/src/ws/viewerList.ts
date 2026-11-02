@@ -12,6 +12,8 @@ export interface ViewerConnection {
   selectedSlot: number | null;
   /** Paused because the same user watches from another tab, so it receives nothing. */
   isPaused: boolean;
+  /** An admin watching hidden (see set-hidden): in no list and no count. */
+  hidden: boolean;
 }
 
 export interface RoomPerson {
@@ -22,13 +24,15 @@ export interface RoomPerson {
 /**
  * One entry per user, in join order, on the broadcast that user actually receives:
  * a paused sibling tab or a capture-only connection (watching nothing) never hides
- * the one that is watching. Anonymous connections each stay their own entry.
+ * the one that is watching. Anonymous connections each stay their own entry, and an
+ * admin watching hidden is left out.
  */
 export function listRoomPeople(connections: Iterable<ViewerConnection>): RoomPerson[] {
   const people: RoomPerson[] = [];
   const indexByUser = new Map<string, number>();
 
   for (const connection of connections) {
+    if (connection.hidden) continue;
     const slot = connection.isPaused ? null : connection.selectedSlot;
     const { userId } = connection;
     const index = userId === null ? undefined : indexByUser.get(userId);

@@ -39,6 +39,10 @@ import {
 export interface VoiceState {
   connected: boolean;
   userId: string | null;
+  /** May close anyone's room (the server re-checks it). */
+  isAdmin: boolean;
+  /** Voice rooms are on for everyone; off until an admin turns them on (set-enabled). */
+  enabled: boolean;
   rooms: VoiceRoomInfo[];
   /** The room this app is in, and its seat there. */
   roomId: string | null;
@@ -68,6 +72,10 @@ export interface VoiceSession {
   createRoom(name: string): void;
   joinRoom(roomId: string): void;
   leaveRoom(): void;
+  /** Admin only: closes a room, taking everyone out of it. */
+  deleteRoom(roomId: string): void;
+  /** Admin only: turns voice rooms on or off for everyone; off closes every room. */
+  setEnabled(enabled: boolean): void;
   toggleMute(): void;
   toggleDeafen(): void;
   setNoiseSuppression(on: boolean): void;
@@ -101,6 +109,9 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
   let state: VoiceState = {
     connected: false,
     userId: null,
+    isAdmin: false,
+    // Off until the server says otherwise, so the section never flashes up for nothing.
+    enabled: false,
     rooms: [],
     roomId: null,
     slot: null,
@@ -255,10 +266,10 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
   function handleControl(message: VoiceServerMessage): void {
     switch (message.kind) {
       case "welcome":
-        update({ userId: message.userId });
+        update({ userId: message.userId, isAdmin: message.isAdmin === true });
         return;
       case "rooms": {
-        update({ rooms: message.rooms });
+        update({ rooms: message.rooms, enabled: message.enabled !== false });
         const here = message.rooms.find((room) => room.id === state.roomId);
         if (here) applyVolumes(here);
         if (rejoinRoomId) {
@@ -341,6 +352,14 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
       send({ kind: "join-room", roomId });
     },
     leaveRoom: () => send({ kind: "leave-room" }),
+    deleteRoom: (roomId) => {
+      update({ error: null });
+      send({ kind: "delete-room", roomId });
+    },
+    setEnabled: (enabled) => {
+      update({ error: null });
+      send({ kind: "set-enabled", enabled });
+    },
     toggleMute() {
       if (state.deafened) {
         // Unmuting while deafened undeafens too, as in Discord.

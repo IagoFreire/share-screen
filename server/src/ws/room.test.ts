@@ -1,8 +1,14 @@
 import type { WebSocket } from "ws";
 import { describe, expect, it } from "vitest";
+import type { PresenterAudience } from "./audience.js";
 import { Room } from "./room.js";
 
 const presenterSocket = {} as WebSocket;
+
+/** An audience with nobody watching hidden: what the presenter is shown is all of it. */
+function seen(watchers: number, videoWatchers: number): PresenterAudience {
+  return { watchers, videoWatchers, shown: { watchers, videoWatchers } };
+}
 const LAYERS = [
   { layer: 0, height: 1080, framerate: 60 },
   { layer: 1, height: 720, framerate: 30 },
@@ -39,7 +45,7 @@ describe("Room audiences", () => {
     const room = new Room("c1", 10);
     const slot = room.allocateSlot(presenterSocket, "42", null)!;
 
-    room.setAudience(slot, { watchers: 0, videoWatchers: 0 });
+    room.setAudience(slot, seen(0, 0));
 
     expect(room.isPaused(slot)).toBe(true);
     expect(room.streams[0].paused).toBe(true);
@@ -49,7 +55,7 @@ describe("Room audiences", () => {
     const room = new Room("c1", 10);
     const slot = room.allocateSlot(presenterSocket, "42", null)!;
 
-    room.setAudience(slot, { watchers: 0, videoWatchers: 1 });
+    room.setAudience(slot, seen(0, 1));
 
     expect(room.isPaused(slot)).toBe(false);
   });
@@ -58,7 +64,7 @@ describe("Room audiences", () => {
     const room = new Room("c1", 10);
     const slot = room.allocateSlot(presenterSocket, "42", null)!;
 
-    room.setAudience(slot, { watchers: 1, videoWatchers: 0 });
+    room.setAudience(slot, seen(1, 0));
 
     expect(room.isPaused(slot)).toBe(false);
   });
@@ -67,9 +73,26 @@ describe("Room audiences", () => {
     const room = new Room("c1", 10);
     const slot = room.allocateSlot(presenterSocket, "42", null)!;
 
-    expect(room.setAudience(slot, { watchers: 2, videoWatchers: 2 })).toBe(true);
-    expect(room.setAudience(slot, { watchers: 2, videoWatchers: 2 })).toBe(false);
-    expect(room.setAudience(slot, { watchers: 2, videoWatchers: 1 })).toBe(true);
+    expect(room.setAudience(slot, seen(2, 2))).toBe(true);
+    expect(room.setAudience(slot, seen(2, 2))).toBe(false);
+    expect(room.setAudience(slot, seen(2, 1))).toBe(true);
+  });
+
+  it("shows a broadcast only an admin watches hidden as paused, though it keeps sending", () => {
+    const room = new Room("c1", 10);
+    const slot = room.allocateSlot(presenterSocket, "42", null)!;
+
+    room.setAudience(slot, { watchers: 1, videoWatchers: 1, shown: { watchers: 0, videoWatchers: 0 } });
+
+    expect(room.isPaused(slot)).toBe(true);
+  });
+
+  it("counts an admin going hidden as a change", () => {
+    const room = new Room("c1", 10);
+    const slot = room.allocateSlot(presenterSocket, "42", null)!;
+    room.setAudience(slot, seen(1, 1));
+
+    expect(room.setAudience(slot, { watchers: 1, videoWatchers: 1, shown: { watchers: 0, videoWatchers: 0 } })).toBe(true);
   });
 });
 
