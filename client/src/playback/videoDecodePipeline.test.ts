@@ -8,7 +8,7 @@ class FakeDecoder {
   static isConfigSupported = async () => ({ supported: true });
   state = "unconfigured";
   decodeQueueSize = 0;
-  decoded: Array<{ type: string }> = [];
+  decoded: Array<{ type: string; timestamp: number }> = [];
   throwOnDecode = false;
   constructor(public init: { output: (frame: unknown) => void; error: (error: unknown) => void }) {
     FakeDecoder.last = this;
@@ -17,7 +17,7 @@ class FakeDecoder {
   configure() {
     this.state = "configured";
   }
-  decode(chunk: { type: string }) {
+  decode(chunk: { type: string; timestamp: number }) {
     if (this.throwOnDecode) throw new DOMException("not a keyframe", "DataError");
     this.decoded.push(chunk);
   }
@@ -43,8 +43,10 @@ describe("startVideoDecodePipeline", () => {
       "EncodedVideoChunk",
       class {
         type: string;
-        constructor(init: { type: string }) {
+        timestamp: number;
+        constructor(init: { type: string; timestamp: number }) {
           this.type = init.type;
+          this.timestamp = init.timestamp;
         }
       },
     );
@@ -78,6 +80,60 @@ describe("startVideoDecodePipeline", () => {
     for (const frame of frames) FakeDecoder.last!.init.output(frame);
 
     expect(frames.every((frame) => frame.close.mock.calls.length === 0)).toBe(true);
+  });
+
+  describe("a clock far behind the picture", () => {
+    // A hardware decoder outputs into a pool of ~15 surfaces (measured in Chrome) and every
+    // held VideoFrame keeps one. Holding 17-34 frames for the audio clock stopped the
+    // decoder in a real live, and its restarts froze the picture every few seconds.
+    const chunkAt = (i: number) => ({ keyFrame: i === 0, timestampUs: 1_000_000 + i * FRAME_US, data: new Uint8Array(1) });
+
+    /** Lets the fake decoder output every chunk it was handed, as a real one with free surfaces would. */
+    function drain(decoder: FakeDecoder, outputs: { count: number }) {
+      while (outputs.count < decoder.decoded.length) {
+        decoder.init.output(fakeFrame(decoder.decoded[outputs.count++]!.timestamp));
+      }
+    }
+
+    it("hands the decoder only a few frames ahead of the screen, keeping the rest encoded", async () => {
+      const clock = { setSource: vi.fn(), currentTimestampUs: () => 0 };
+      const pipeline = await startVideoDecodePipeline(fakeCanvas(), { clock });
+      const outputs = { count: 0 };
+
+      for (let i = 0; i < 40; i++) {
+        pipeline.decodeChunk(chunkAt(i));
+        drain(FakeDecoder.last!, outputs);
+      }
+
+      expect(FakeDecoder.last!.decoded.length).toBeLessThanOrEqual(6);
+      expect(pipeline.stats().queuedFrames).toBeLessThanOrEqual(6);
+      expect(pipeline.stats().bufferedChunks).toBe(40 - FakeDecoder.last!.decoded.length);
+    });
+
+    it("keeps feeding the decoder in order as the clock reaches the held frames", async () => {
+      let nowUs = 0;
+      const clock = { setSource: vi.fn(), currentTimestampUs: () => nowUs };
+      const pipeline = await startVideoDecodePipeline(fakeCanvas(), { clock });
+      const outputs = { count: 0 };
+      for (let i = 0; i < 40; i++) {
+        pipeline.decodeChunk(chunkAt(i));
+        drain(FakeDecoder.last!, outputs);
+      }
+
+      nowUs = chunkAt(20).timestampUs;
+      pipeline.decodeChunk(chunkAt(40));
+      drain(FakeDecoder.last!, outputs);
+      expect(FakeDecoder.last!.decoded.length).toBeGreaterThan(21);
+      expect(pipeline.stats().queuedFrames).toBeLessThanOrEqual(6);
+
+      nowUs = chunkAt(100).timestampUs;
+      pipeline.decodeChunk(chunkAt(41));
+      drain(FakeDecoder.last!, outputs);
+      expect(FakeDecoder.last!.decoded.map((chunk) => chunk.timestamp)).toEqual(
+        Array.from({ length: 42 }, (_, i) => chunkAt(i).timestampUs),
+      );
+      expect(FakeDecoder.created).toBe(1);
+    });
   });
 
   const key = { keyFrame: true, timestampUs: 0, data: new Uint8Array(1) };
@@ -139,23 +195,27 @@ describe("startVideoDecodePipeline", () => {
       expect(pipeline.stats().overloads).toBe(1);
     });
 
-    it("catches up a backlog stuck a little behind, without calling it overload", async () => {
-      // After a minimized stretch the decoder can stay ~1 s behind for good: it decodes
-      // only as fast as frames are shown, so the backlog never drains.
-      const onKeyframeNeeded = vi.fn();
+    it("runs a backlog behind the clock through to live instead of leaving it stuck", async () => {
+      // After a minimized stretch a backlog used to stay ~1 s behind for good: held frames
+      // starved the decoder, so it decoded only as fast as frames were shown. Frames
+      // already behind the clock now come out, get dropped, and free room at once.
+      const clock = { setSource: vi.fn(), currentTimestampUs: () => 1_000_000 };
       const onOverload = vi.fn();
-      const pipeline = await startVideoDecodePipeline(fakeCanvas(), { onKeyframeNeeded, onOverload });
-      const first = FakeDecoder.last!;
-      for (let t = 0; t <= 4000 && FakeDecoder.created === 1; t += 100) {
-        perfNow = t;
-        pipeline.decodeChunk({ keyFrame: t === 0, timestampUs: t * 1000, data: new Uint8Array(1) });
-        if (t >= 800) first.init.output(fakeFrame((t - 800) * 1000)); // always 800 ms late
-      }
+      const pipeline = await startVideoDecodePipeline(fakeCanvas(), { clock, onOverload });
+      const decoder = FakeDecoder.last!;
+      let outputs = 0;
 
-      expect(FakeDecoder.created).toBe(2);
+      for (let i = 0; i <= 60; i++) {
+        pipeline.decodeChunk({ keyFrame: i === 0, timestampUs: i * FRAME_US, data: new Uint8Array(1) });
+      }
+      while (outputs < decoder.decoded.length) decoder.init.output(fakeFrame(decoder.decoded[outputs++]!.timestamp));
+
+      expect(decoder.decoded).toHaveLength(61);
+      expect(pipeline.stats().bufferedChunks).toBe(0);
+      // The newest due frame waits for a paint, and the last one isn't due yet.
+      expect(pipeline.stats().queuedFrames).toBeLessThanOrEqual(2);
+      expect(FakeDecoder.created).toBe(1);
       expect(onOverload).not.toHaveBeenCalled();
-      expect(onKeyframeNeeded).toHaveBeenCalledTimes(1);
-      expect(pipeline.stats().catchUps).toBe(1);
     });
 
     it("leaves a busy decoder alone while it keeps up", async () => {
