@@ -9,7 +9,15 @@ import {
 import type { CaptureStreams } from "../capture/screenCapture.js";
 import type { startAudioEncodePipeline, AudioEncodePipeline } from "../capture/audioEncodePipeline.js";
 import type { startVideoEncodePipeline, VideoEncodePipeline } from "../capture/videoEncodePipeline.js";
-import { createBitrateController, createUplinkGate, uplinkHighWaterBytes, type UplinkGate } from "./uplinkGate.js";
+import {
+  createBitrateController,
+  createUplinkDelayWatch,
+  createUplinkGate,
+  UPLINK_PROBE_EVERY_MS,
+  UPLINK_PROBE_FORGET_MS,
+  uplinkHighWaterBytes,
+  type UplinkGate,
+} from "./uplinkGate.js";
 
 /**
  * One person's broadcast, independent of any page: capture -> encode -> frames on the
@@ -99,10 +107,39 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
   /** From layers-in-use; null (everything runs) until the relay says. */
   let layersInUse: Set<number> | null = null;
   let bitrate = createBitrateController();
+  /** uplink-probes awaiting their ack: id -> performance.now() when sent. */
+  const probes = new Map<number, number>();
+  let nextProbeId = 1;
+  let probeTimer: ReturnType<typeof setInterval> | null = null;
+  const uplinkDelay = createUplinkDelayWatch();
   const endedListeners: Array<() => void> = [];
+
+  function sendProbe(): void {
+    const now = performance.now();
+    for (const [id, sentAt] of probes) if (now - sentAt > UPLINK_PROBE_FORGET_MS) probes.delete(id);
+    probes.set(nextProbeId, now);
+    deps.sendControl({ kind: "uplink-probe", id: nextProbeId });
+    nextProbeId += 1;
+  }
+
+  /** A probe came back: a queue building on the upload costs bitrate before it costs the game's ping. */
+  function onProbeAck(id: number): void {
+    const sentAt = probes.get(id);
+    if (sentAt === undefined) return;
+    probes.delete(id);
+    const now = performance.now();
+    if (uplinkDelay.observe(sentAt, now)) applyBitrateScale(bitrate.onCongestion(now));
+  }
+
+  function stopProbing(): void {
+    if (probeTimer !== null) clearInterval(probeTimer);
+    probeTimer = null;
+    probes.clear();
+  }
 
   function stop(): void {
     if (!isPresenting) return;
+    stopProbing();
     for (const layer of layers) layer.pipeline?.stop();
     layers = [];
     for (const track of layerTracks) track.stop();
@@ -239,6 +276,8 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
       };
       deps.sendControl(announcement);
       isPresenting = true;
+      uplinkDelay.reset();
+      probeTimer = setInterval(sendProbe, UPLINK_PROBE_EVERY_MS);
       return { hasAudio: audioTrack !== null };
     },
 
@@ -247,6 +286,9 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
     reannounce() {
       if (!isPresenting || !announcement) return;
       deps.sendControl(announcement);
+      // A new socket: the old one's probes never come back, and its route may differ.
+      probes.clear();
+      uplinkDelay.reset();
       // Whoever is watching on the relay's side starts from scratch.
       for (const layer of layers) layer.pipeline?.requestKeyframe();
     },
@@ -270,6 +312,9 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
         case "layers-in-use":
           layersInUse = new Set(message.layers);
           applyPauses();
+          return true;
+        case "uplink-probe-ack":
+          onProbeAck(message.id);
           return true;
         default:
           return false;

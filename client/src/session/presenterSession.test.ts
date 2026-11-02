@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildQualityPreset,
   planLayers,
@@ -256,6 +256,59 @@ describe("presenter session upload", () => {
 
     expect(bitrateScales).toHaveLength(1);
     expect(bitrateScales[0]).toBeLessThan(1);
+  });
+});
+
+describe("presenter session upload probes", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const probeIds = (controls: ControlMessage[]) =>
+    controls.flatMap((message) => (message.kind === "uplink-probe" ? [message.id] : []));
+
+  /** One probe period; the relay answers the newest probe at once, or the one before it 250 ms late. */
+  function period(session: ReturnType<typeof setup>["session"], controls: ControlMessage[], late: boolean) {
+    vi.advanceTimersByTime(250);
+    const ids = probeIds(controls);
+    const id = late ? ids.at(-2) : ids.at(-1);
+    if (id !== undefined) session.handleControl({ kind: "uplink-probe-ack", id });
+  }
+
+  it("keeps probing the upload while live, and stops with the broadcast", async () => {
+    const { session, controls } = setup();
+    await session.start(QUALITY);
+
+    vi.advanceTimersByTime(1000);
+    const whileLive = probeIds(controls).length;
+    session.stop();
+    vi.advanceTimersByTime(1000);
+
+    expect(whileLive).toBe(4);
+    expect(probeIds(controls)).toHaveLength(4);
+  });
+
+  it("lowers the bitrate once probes keep coming back late: the upload is queueing", async () => {
+    const { session, controls, bitrateScales } = setup();
+    await session.start(QUALITY);
+    for (let i = 0; i < 20; i++) period(session, controls, false);
+    expect(bitrateScales).toEqual([]);
+
+    for (let i = 0; i < 6; i++) period(session, controls, true);
+
+    expect(bitrateScales).toHaveLength(1);
+    expect(bitrateScales[0]).toBeLessThan(1);
+  });
+
+  it("takes the relay's answers as its own business, and ignores unknown ones", async () => {
+    const { session, bitrateScales } = setup();
+    await session.start(QUALITY);
+
+    expect(session.handleControl({ kind: "uplink-probe-ack", id: 999 })).toBe(true);
+    expect(bitrateScales).toEqual([]);
   });
 });
 

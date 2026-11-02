@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createBitrateController, createUplinkGate, uplinkHighWaterBytes } from "./uplinkGate.js";
+import {
+  createBitrateController,
+  createUplinkDelayWatch,
+  createUplinkGate,
+  uplinkHighWaterBytes,
+  type UplinkDelayWatch,
+} from "./uplinkGate.js";
 
 const HIGH = 1000;
 
@@ -57,12 +63,12 @@ describe("bitrate controller", () => {
     expect(controller.onCongestion(3000)).toBeCloseTo(0.64);
   });
 
-  it("never goes below half the target", () => {
+  it("never goes below 30% of the target", () => {
     const controller = createBitrateController();
     let scale: number | null = 1;
     for (let at = 0; at < 60_000; at += 2000) scale = controller.onCongestion(at) ?? scale;
 
-    expect(scale).toBe(0.5);
+    expect(scale).toBe(0.3);
   });
 
   it("climbs back slowly once the link stays clean", () => {
@@ -74,5 +80,42 @@ describe("bitrate controller", () => {
     expect(controller.onHealthy(12_000)).toBeNull();
     expect(controller.onHealthy(16_000)).toBeCloseTo(1);
     expect(controller.onHealthy(30_000)).toBeNull(); // already at the target
+  });
+});
+
+describe("uplink delay watch", () => {
+  /** Probes every 250 ms from `fromMs`, each coming back after `rttMs`; the last verdict. */
+  function probe(watch: UplinkDelayWatch, fromMs: number, untilMs: number, rttMs: number): boolean {
+    let filling = false;
+    for (let sent = fromMs; sent < untilMs; sent += 250) filling = watch.observe(sent, sent + rttMs);
+    return filling;
+  }
+
+  it("takes a steady round trip as an empty queue, however long the route", () => {
+    expect(probe(createUplinkDelayWatch(), 0, 10_000, 180)).toBe(false);
+  });
+
+  it("flags an upload whose queue stays long: that is the game's ping going up", () => {
+    const watch = createUplinkDelayWatch();
+    probe(watch, 0, 5000, 40);
+
+    expect(probe(watch, 5000, 6000, 200)).toBe(true);
+  });
+
+  it("lets a single keyframe's spike pass", () => {
+    const watch = createUplinkDelayWatch();
+    probe(watch, 0, 5000, 40);
+
+    expect(watch.observe(5000, 5250)).toBe(false);
+    expect(probe(watch, 5250, 7000, 40)).toBe(false);
+  });
+
+  it("starts over on a new connection, whose route may be slower", () => {
+    const watch = createUplinkDelayWatch();
+    probe(watch, 0, 5000, 40);
+
+    watch.reset();
+
+    expect(probe(watch, 5000, 10_000, 200)).toBe(false);
   });
 });

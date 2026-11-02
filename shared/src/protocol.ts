@@ -302,6 +302,14 @@ export type ControlMessage =
    */
   | { kind: "report-congestion" }
   /**
+   * Presenter -> server, answered at once with uplink-probe-ack: a probe sent behind the
+   * frames already queued on the presenter's upload, so its round trip shows how long
+   * that queue is. A queue in the home router is what raises the presenter's ping in a
+   * game while live, long before the browser's own send buffer fills.
+   */
+  | { kind: "uplink-probe"; id: number }
+  | { kind: "uplink-probe-ack"; id: number }
+  /**
    * Admin -> server: play the broadcast on `slot` this much louder for everyone (a quiet
    * presenter). The relay checks the admin itself, stores it on the broadcast and sends
    * the new stream list, so late joiners get it too. 1 is as sent; see StreamInfo.gain.

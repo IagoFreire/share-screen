@@ -1,3 +1,5 @@
+import { createQueueDelayMonitor } from "../playback/streamReceiver.js";
+
 /**
  * Keeps the presenter's upload from queueing without bound.
  *
@@ -57,8 +59,12 @@ export function createUplinkGate(highWaterBytes: number): UplinkGate {
   };
 }
 
-/** Never encode below this share of the chosen bitrate. */
-const MIN_SCALE = 0.5;
+/**
+ * Never encode below this share of the chosen bitrate. Low enough that a slow upload
+ * (720p30 lands near 1.3 Mbps in all) still fits under the link instead of keeping the
+ * router's queue -- and the presenter's ping in game -- full.
+ */
+const MIN_SCALE = 0.3;
 const STEP_DOWN = 0.8;
 const STEP_UP = 1.15;
 /** A change needs this long to show in the send buffer before the next one. */
@@ -96,6 +102,54 @@ export function createBitrateController(): BitrateController {
     onHealthy(now) {
       if (scale >= 1 || now - lastCongestionAt < HEALTHY_AFTER_MS || now - lastChangeAt < STEP_UP_EVERY_MS) return null;
       return change(Math.min(1, scale * STEP_UP), now);
+    },
+  };
+}
+
+/** How often the presenter sends an uplink-probe. */
+export const UPLINK_PROBE_EVERY_MS = 250;
+/** A probe the relay never answered (the connection changed) is forgotten after this. */
+export const UPLINK_PROBE_FORGET_MS = 10_000;
+/**
+ * Queueing above the best recent round trip that counts as a filling upload. Every ms
+ * of it is added to the presenter's ping in game, so this sits well below where the
+ * send buffer (and the gate above) would notice anything.
+ */
+const UPLINK_QUEUE_LIMIT_MS = 80;
+/** ...once it lasts this long: a single keyframe is a short spike, not a full link. */
+const UPLINK_QUEUE_SUSTAIN_MS = 500;
+
+export interface UplinkDelayWatch {
+  /** A probe sent at `sentMs` came back at `ackMs`; true while the upload stays queued up. */
+  observe(sentMs: number, ackMs: number): boolean;
+  /** A new connection: its route, and so its round trip, may differ. */
+  reset(): void;
+}
+
+/**
+ * Tells a filling upload from its round trips. An upload near its limit queues in the
+ * home router long before WebSocket.bufferedAmount grows, and everything else on that
+ * link -- the presenter's game included -- waits in the same queue. Probes sent through
+ * the broadcast's own socket wait behind its frames, so their round trip minus the best
+ * recent one is that queue.
+ */
+export function createUplinkDelayWatch(): UplinkDelayWatch {
+  let monitor = createQueueDelayMonitor();
+  let queuedSince: number | null = null;
+
+  return {
+    observe(sentMs, ackMs) {
+      const { queueDelayMs } = monitor.observe(sentMs, ackMs);
+      if (queueDelayMs <= UPLINK_QUEUE_LIMIT_MS) {
+        queuedSince = null;
+        return false;
+      }
+      queuedSince ??= ackMs;
+      return ackMs - queuedSince >= UPLINK_QUEUE_SUSTAIN_MS;
+    },
+    reset() {
+      monitor = createQueueDelayMonitor();
+      queuedSince = null;
     },
   };
 }

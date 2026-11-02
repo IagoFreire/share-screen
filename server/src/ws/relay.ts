@@ -589,6 +589,13 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       return;
     }
 
+    // Answered at once: the presenter times the round trip to see its upload's queue.
+    case "uplink-probe": {
+      if (state.presenterSlot === null || !Number.isSafeInteger(message.id)) return;
+      send(ws, { kind: "uplink-probe-ack", id: message.id });
+      return;
+    }
+
     // Admin-only, unconditionally: unlike stopping a broadcast there's no "your own"
     // case that anyone may do, so this needs no slot comparison -- reject any request
     // from a non-admin outright.
