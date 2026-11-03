@@ -1,5 +1,10 @@
 # Deploy: AWS Lightsail (Ubuntu, 1GB RAM)
 
+> **Nota:** a produção hoje roda num PC de casa com o `start-bot.bat` (veja
+> [HOSPEDAGEM.md](HOSPEDAGEM.md)), e o workflow de deploy só roda manualmente. Este documento
+> fica como referência caso o relay volte para o Lightsail. A seção 0 (túnel de dev) continua
+> valendo.
+
 ## 0. Local dev tunnel (Cloudflare, not ngrok)
 
 Discord only loads an Activity over HTTPS, so local development needs a public
