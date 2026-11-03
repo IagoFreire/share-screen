@@ -467,6 +467,47 @@ body.viewer .status {
   background: #b52e32;
 }
 
+/* "Carregando a live…": from picking a live until its first picture (ui/loadingOverlay.ts).
+   Sits under the idle screen, which covers it whenever there is nothing to load. */
+.player-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  line-height: 1.4;
+  font-size: 0.95rem;
+  color: var(--player-text);
+  pointer-events: none;
+}
+
+.player-loading[hidden] {
+  display: none;
+}
+
+.player-loading-spinner {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 3px solid rgba(219, 222, 225, 0.18);
+  border-top-color: var(--accent);
+  animation: player-loading-spin 0.9s linear infinite;
+}
+
+@keyframes player-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-loading-spinner {
+    animation-duration: 2.4s;
+  }
+}
+
 /* Placeholder shown while nobody is broadcasting (and right after one ends), so the
    panel never sits on a black void or a frozen last frame. */
 .idle-screen {

@@ -247,6 +247,24 @@ describe("startVideoDecodePipeline", () => {
       expect(onOverload).not.toHaveBeenCalled();
     });
 
+    it("asks again for a keyframe it missed, once a second, instead of waiting out the periodic one", async () => {
+      // Switching lives, the keyframe the relay asks for can land before this pipeline
+      // exists; the relay then sends only deltas, and the picture stayed black for up to
+      // KEYFRAME_INTERVAL_MS.
+      const onKeyframeNeeded = vi.fn();
+      const pipeline = await startVideoDecodePipeline(fakeCanvas(), { onKeyframeNeeded });
+
+      pipeline.decodeChunk(delta);
+      perfNow = 500;
+      pipeline.decodeChunk({ ...delta, timestampUs: 16_667 });
+      expect(onKeyframeNeeded).toHaveBeenCalledTimes(1);
+
+      perfNow = 1100;
+      pipeline.decodeChunk({ ...delta, timestampUs: 33_333 });
+      expect(onKeyframeNeeded).toHaveBeenCalledTimes(2);
+      expect(FakeDecoder.last!.decoded).toEqual([]);
+    });
+
     it("resyncToLive also throws away what is still inside the decoder", async () => {
       const pipeline = await startVideoDecodePipeline(fakeCanvas());
       pipeline.decodeChunk(key);
@@ -258,6 +276,27 @@ describe("startVideoDecodePipeline", () => {
       expect(FakeDecoder.created).toBe(2);
       expect(FakeDecoder.last!.decoded.map((chunk) => chunk.type)).toEqual(["key"]);
     });
+  });
+
+  it("says once when the first picture is on screen, so a loading indicator can go", async () => {
+    let paint: FrameRequestCallback = () => {};
+    vi.stubGlobal("requestAnimationFrame", vi.fn((callback: FrameRequestCallback) => {
+      paint = callback;
+      return 1;
+    }));
+    const onFirstFrame = vi.fn();
+    const clock = { setSource: vi.fn(), currentTimestampUs: () => 10_000_000 };
+    await startVideoDecodePipeline(fakeCanvas(), { clock, onFirstFrame });
+
+    paint(0);
+    expect(onFirstFrame).not.toHaveBeenCalled();
+
+    FakeDecoder.last!.init.output(fakeFrame(0));
+    paint(16);
+    FakeDecoder.last!.init.output(fakeFrame(FRAME_US));
+    paint(33);
+
+    expect(onFirstFrame).toHaveBeenCalledTimes(1);
   });
 
   it("awaitKeyframe holds deltas back until the next keyframe (a frame went missing)", async () => {

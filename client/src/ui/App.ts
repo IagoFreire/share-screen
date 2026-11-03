@@ -36,6 +36,7 @@ import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } fr
 import { createQualityMenu, type QualityChoice } from "./qualityMenu.js";
 import { createGainControl } from "./gainControl.js";
 import { createViewersMenu } from "./viewersMenu.js";
+import { createLoadingOverlay } from "./loadingOverlay.js";
 
 /** Where the desktop app (Janja) is downloaded from. */
 const DESKTOP_APP_DOWNLOAD_URL = "https://github.com/IagoFreire/share-screen/releases";
@@ -133,6 +134,7 @@ export function mountApp(options: MountAppOptions): void {
   const fullscreenButton = root.querySelector<HTMLButtonElement>("#fullscreen-btn")!;
   const canvas = root.querySelector<HTMLCanvasElement>("#viewer-canvas")!;
   const idleScreen = root.querySelector<HTMLDivElement>("#idle-screen")!;
+  const loading = createLoadingOverlay(player, idleScreen);
   const idleTitle = root.querySelector<HTMLParagraphElement>("#idle-title")!;
   const idleSubtitle = root.querySelector<HTMLParagraphElement>("#idle-subtitle")!;
   const resumeButton = root.querySelector<HTMLButtonElement>("#resume-btn")!;
@@ -368,14 +370,17 @@ export function mountApp(options: MountAppOptions): void {
     if (slot === selectedSlot) return;
     selectedSlot = slot;
     captureStatus = null; // the relay sends the new broadcast's own
-    wsClient.sendControl({ kind: "select-stream", slot });
 
     teardownVideoPipeline();
     clearCanvas();
     render();
 
-    // No keyframe request of our own: the relay asks the presenter for one on select-stream.
+    // The decoder is ready before the relay is asked to switch: the keyframe it requests
+    // for this switch could otherwise land before the decoder existed and be lost, the
+    // picture black until the presenter's periodic keyframe (see watchView.ts).
     await ensureVideoPipeline();
+    if (selectedSlot !== slot) return; // another pick came in meanwhile and sends its own
+    wsClient.sendControl({ kind: "select-stream", slot });
     ensureAudioPipeline(audioParamsForSelection());
   }
 
@@ -560,10 +565,12 @@ export function mountApp(options: MountAppOptions): void {
   async function ensureVideoPipeline(): Promise<void> {
     if (videoDisabled || videoDecodePipeline) return;
     const generation = ++videoPipelineGeneration;
+    loading.show();
     const pipeline = await startVideoDecodePipeline(canvas, {
       clock: mediaClock,
       onKeyframeNeeded: () => wsClient.sendControl({ kind: "request-keyframe" }),
       onOverload: () => receiver.reportCongestion(),
+      onFirstFrame: () => loading.hide(),
     });
     if (generation !== videoPipelineGeneration) {
       // Superseded by a later join/resume/toggle while the decoder was starting up.
@@ -577,6 +584,7 @@ export function mountApp(options: MountAppOptions): void {
     videoPipelineGeneration++; // invalidates any in-flight ensureVideoPipeline() call
     videoDecodePipeline?.stop();
     videoDecodePipeline = null;
+    loading.hide();
   }
 
   shareButton.addEventListener("click", () => {

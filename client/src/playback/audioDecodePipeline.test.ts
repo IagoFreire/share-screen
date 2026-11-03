@@ -306,6 +306,21 @@ describe("audio decode pipeline", () => {
     expect(played.every((p) => p.end <= Math.max(p.start, ctxTime))).toBe(true);
   });
 
+  it("reset also drops the old broadcast's sound still inside the decoder", () => {
+    // A real AudioDecoder outputs asynchronously: packets of the live just left came out
+    // after reset and played on its timeline, ahead of the new live's first packet --
+    // the clock video follows started off on the wrong broadcast.
+    const pipeline = startAudioDecodePipeline({ sampleRate: 48_000, channels: 2 });
+    feed(pipeline, [{ tsUs: T0_US, at: 1 }]);
+
+    pipeline.reset();
+    feed(pipeline, [{ tsUs: 5_000_000, at: 1.05 }]);
+
+    expect(decoders[0]!.state).toBe("closed");
+    expect(decoders).toHaveLength(2);
+    expect(played.at(-1)!.start).toBeCloseTo(1.05 + 0.3);
+  });
+
   it("plays at the viewer's volume times the gain an admin set on the broadcast", () => {
     const pipeline = startAudioDecodePipeline({ sampleRate: 48_000, channels: 2 });
 

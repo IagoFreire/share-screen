@@ -82,6 +82,8 @@ export interface VideoDecodePipelineOptions {
    * steps down (see report-congestion).
    */
   onOverload?: () => void;
+  /** Called once, when the first picture is drawn (a loading indicator can go). */
+  onFirstFrame?: () => void;
 }
 
 /**
@@ -117,12 +119,17 @@ const MAX_FRAMES_IN_FLIGHT = 6;
 const MAX_BUFFERED_SPAN_US = AV_SYNC_PLAUSIBILITY_WINDOW_US + 1_000_000;
 /** A typical display refresh until the real one has been measured. */
 const DEFAULT_REFRESH_MS = 1000 / 60;
+/**
+ * Deltas arriving while a keyframe is awaited mean the keyframe went by unseen -- the
+ * relay only sends deltas after one -- so another is asked for at most this often.
+ */
+const MISSED_KEYFRAME_ASK_EVERY_MS = 1000;
 
 export async function startVideoDecodePipeline(
   canvas: HTMLCanvasElement,
   options: VideoDecodePipelineOptions = {},
 ): Promise<VideoDecodePipeline> {
-  const { clock, onKeyframeNeeded, onOverload } = options;
+  const { clock, onKeyframeNeeded, onOverload, onFirstFrame } = options;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas 2D context unavailable.");
 
@@ -148,6 +155,8 @@ export async function startVideoDecodePipeline(
   /** Since when the oldest chunk has waited longer than CATCH_UP_WAIT_MS; null when not. */
   let laggingSince: number | null = null;
   let catchUps = 0;
+  let lastMissedKeyframeAskAt = -Infinity;
+  let hasDrawn = false;
 
   // Maps stream timestamps onto local wall-clock time. Established from the first frame
   // and re-established whenever playback falls behind (see presentFrames).
@@ -165,6 +174,10 @@ export async function startVideoDecodePipeline(
       canvas.height = frame.displayHeight;
     }
     ctx!.drawImage(frame, 0, 0, canvas.width, canvas.height);
+    if (!hasDrawn) {
+      hasDrawn = true;
+      onFirstFrame?.();
+    }
   }
 
   /**
@@ -338,6 +351,7 @@ export async function startVideoDecodePipeline(
     waitingForKeyframe = true;
     decoderNeedsKey = true;
     chunks.length = 0;
+    lastMissedKeyframeAskAt = performance.now(); // asked just now; deltas meanwhile don't ask again
     onKeyframeNeeded?.();
   }
 
@@ -403,10 +417,19 @@ export async function startVideoDecodePipeline(
       if (stopped) return;
       checkDecoderLag();
 
-      // A decoder can only start on a keyframe; silently wait until one arrives
-      // (e.g. right after connecting, or after a request-keyframe round-trip).
+      // A decoder can only start on a keyframe; wait until one arrives (right after
+      // connecting, or after a request-keyframe round-trip). A delta meanwhile says it
+      // went by unseen -- landed before this pipeline existed, on a stream switch -- so
+      // ask again rather than sit black until the presenter's periodic one.
       if (waitingForKeyframe) {
-        if (!chunk.keyFrame) return;
+        if (!chunk.keyFrame) {
+          const now = performance.now();
+          if (now - lastMissedKeyframeAskAt >= MISSED_KEYFRAME_ASK_EVERY_MS) {
+            lastMissedKeyframeAskAt = now;
+            onKeyframeNeeded?.();
+          }
+          return;
+        }
         waitingForKeyframe = false;
       }
       chunks.push(chunk);
@@ -427,6 +450,7 @@ export async function startVideoDecodePipeline(
     },
     awaitKeyframe: () => {
       waitingForKeyframe = true;
+      lastMissedKeyframeAskAt = performance.now(); // the caller asks for it (see streamReceiver.ts)
     },
     stats: () => ({
       droppedFrames,

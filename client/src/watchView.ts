@@ -34,6 +34,7 @@ import { createGainControl } from "./ui/gainControl.js";
 import { createViewersMenu } from "./ui/viewersMenu.js";
 import { browserHiddenWatch } from "./ui/hiddenWatch.js";
 import { autoWatchSlot, isOwnStream } from "./ui/streamChoice.js";
+import { createLoadingOverlay } from "./ui/loadingOverlay.js";
 
 /** Lockout after the "ao vivo" button -- see App.ts. */
 const JUMP_TO_LIVE_COOLDOWN_MS = 1500;
@@ -145,6 +146,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   const fullscreenButton = root.querySelector<HTMLButtonElement>("#fullscreen-btn")!;
   const canvas = root.querySelector<HTMLCanvasElement>("#viewer-canvas")!;
   const idleScreen = root.querySelector<HTMLDivElement>("#idle-screen")!;
+  const loading = createLoadingOverlay(player, idleScreen);
   const idleTitle = root.querySelector<HTMLParagraphElement>("#idle-title")!;
   const idleSubtitle = root.querySelector<HTMLParagraphElement>("#idle-subtitle")!;
   const resumeButton = root.querySelector<HTMLButtonElement>("#resume-btn")!;
@@ -431,15 +433,19 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     selectedSlot = slot;
     captureStatus = null; // the relay sends the new broadcast's own
     if (!isOwnSlot(slot)) ownPicked = false;
-    wsClient.sendControl(selectStreamMessage(slot));
 
     teardownVideoPipeline();
     canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
     lastAudioParams = audioParamsForSelection();
     render();
 
-    // No keyframe request of our own: the relay asks the presenter for one on select-stream.
+    // The decoder is ready before the relay is asked to switch. It starts asynchronously,
+    // and the keyframe the relay requests for this switch could land before it existed:
+    // lost, with only deltas after it, the picture stayed black until the presenter's
+    // periodic keyframe, up to 10 s away.
     await ensureVideoPipeline();
+    if (selectedSlot !== slot) return; // another pick came in meanwhile and sends its own
+    wsClient.sendControl(selectStreamMessage(slot));
     void ensureAudioPipeline(lastAudioParams);
   }
 
@@ -579,10 +585,12 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   async function ensureVideoPipeline(): Promise<void> {
     if (videoDisabled || videoDecodePipeline || selectedSlot === null) return;
     const generation = ++videoPipelineGeneration;
+    loading.show();
     const pipeline = await startVideoDecodePipeline(canvas, {
       clock: mediaClock,
       onKeyframeNeeded: () => wsClient.sendControl({ kind: "request-keyframe" }),
       onOverload: () => receiver.reportCongestion(),
+      onFirstFrame: () => loading.hide(),
     });
     if (generation !== videoPipelineGeneration) {
       // Superseded by a later join/resume/toggle while the decoder was starting up.
@@ -596,6 +604,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     videoPipelineGeneration++; // invalidates any in-flight ensureVideoPipeline() call
     videoDecodePipeline?.stop();
     videoDecodePipeline = null;
+    loading.hide();
   }
 
   /**

@@ -8,7 +8,7 @@ rem
 rem BOT_EXPOSE=direto in .env serves the site straight from this PC instead of through
 rem the Cloudflare Tunnel: Caddy serves PUBLIC_ORIGIN's port (the router forwards it
 rem here; see Caddyfile.home) with a certificate it gets through Cloudflare DNS, and
-rem server/src/ops/ddnsCli.ts points the hostname at this home's IP and keeps it there.
+rem server/src/ops/ddnsCli.ts points the hostname at this home's IP on every start.
 rem Without it, the tunnel is used as before.
 
 cd /d "%~dp0"
@@ -90,4 +90,5 @@ if errorlevel 1 (
 )
 start "ScreenShare - server" cmd /k "set NODE_ENV=production&& npm start --workspace=server"
 start "ScreenShare - caddy" cmd /k "caddy run --config Caddyfile.home --adapter caddyfile --envfile .env"
-start "ScreenShare - ddns" cmd /k "node server\dist\ops\ddnsCli.js --watch"
+rem The home IP is fixed, so the start-up update above is enough. On a changing IP, also run
+rem "node server\dist\ops\ddnsCli.js --watch", which follows it every 2 minutes.

@@ -325,6 +325,11 @@ export function startAudioDecodePipeline(params: AudioParams, clock?: MediaClock
       scheduled = [];
       nextStartTime = null;
       nextTimestampUs = 0;
+      // The decoder outputs asynchronously, so packets of the broadcast just left would
+      // still come out after this and play on its timeline -- the clock video follows
+      // would start on the wrong broadcast. A fresh decoder drops them.
+      if (decoder.state !== "closed") decoder.close();
+      decoder = createDecoder();
     },
     stop: () => {
       clock?.setSource(null); // video self-clocks again from here
