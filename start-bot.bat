@@ -4,8 +4,39 @@ rem site, so there is no Vite here -- and the tunnel pointed at it (port 3001). 
 rem watches files, so editing code can't restart the server or reload anyone's tab
 rem mid-live. To ship a code change: close the server window and run this again.
 rem For hot-reload development, use start-bot-dev.bat instead.
+rem
+rem BOT_EXPOSE=direto in .env serves the site straight from this PC instead of through
+rem the Cloudflare Tunnel: Caddy serves PUBLIC_ORIGIN's port (the router forwards it
+rem here; see Caddyfile.home) with a certificate it gets through Cloudflare DNS, and
+rem server/src/ops/ddnsCli.ts points the hostname at this home's IP and keeps it there.
+rem Without it, the tunnel is used as before.
 
 cd /d "%~dp0"
+
+set "EXPOSE=tunel"
+if exist .env for /f "usebackq tokens=1,* delims==" %%a in (`findstr /b /c:"BOT_EXPOSE=" .env`) do set "EXPOSE=%%b"
+if /i "%EXPOSE%"=="direto" (
+  where caddy >nul 2>&1
+  if errorlevel 1 (
+    echo BOT_EXPOSE=direto precisa do Caddy. Instale com: winget install CaddyServer.Caddy
+    echo Depois feche esta janela, abra outra e rode de novo.
+    pause
+    exit /b 1
+  )
+  caddy list-modules | findstr /c:"dns.providers.cloudflare" >nul
+  if errorlevel 1 (
+    echo O Caddy instalado nao tem o plugin do Cloudflare, que tira o certificado pelo DNS.
+    echo Rode uma vez: caddy add-package github.com/caddy-dns/cloudflare
+    pause
+    exit /b 1
+  )
+  tasklist /fi "imagename eq caddy.exe" | find /i "caddy.exe" >nul
+  if not errorlevel 1 (
+    echo O Caddy ja esta rodando em outra janela. Feche as janelas antigas do bot e rode de novo.
+    pause
+    exit /b 1
+  )
+)
 
 rem Either one still running means the old bot windows are open. The server would fail
 rem on the busy port, and two cloudflared instances of the same tunnel would split the
@@ -41,5 +72,22 @@ if errorlevel 1 (
   exit /b 1
 )
 
+if /i "%EXPOSE%"=="direto" goto direct
+
 start "ScreenShare - server" cmd /k "set NODE_ENV=production&& npm start --workspace=server"
 start "ScreenShare - tunnel" cmd /k "cloudflared tunnel --config %USERPROFILE%\.cloudflared\screenshare-bot.yml run screenshare-bot"
+exit /b 0
+
+:direct
+rem The hostname must point here before Caddy asks Let's Encrypt for the certificate.
+echo Apontando o endereco publico para este PC...
+node server\dist\ops\ddnsCli.js
+if errorlevel 1 (
+  echo.
+  echo Nao foi possivel atualizar o DNS, veja o erro acima. Nada foi iniciado.
+  pause
+  exit /b 1
+)
+start "ScreenShare - server" cmd /k "set NODE_ENV=production&& npm start --workspace=server"
+start "ScreenShare - caddy" cmd /k "caddy run --config Caddyfile.home --adapter caddyfile --envfile .env"
+start "ScreenShare - ddns" cmd /k "node server\dist\ops\ddnsCli.js --watch"

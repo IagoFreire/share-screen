@@ -1,4 +1,5 @@
-# Production reverse proxy for the Lightsail deploy (see docs/DEPLOY.md).
+# Production reverse proxy for the Lightsail deploy (see docs/DEPLOY.md). Hosting from
+# home uses Caddyfile.home instead.
 # Terminates TLS itself (automatic Let's Encrypt) instead of sitting behind a
 # CDN/proxy -- a proxy that injects X-Frame-Options: SAMEORIGIN or a conflicting
 # frame-ancestors CSP breaks the Discord Activity iframe embed.

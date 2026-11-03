@@ -1,0 +1,21 @@
+# Reverse proxy for hosting from home without the tunnel (start-bot.bat with
+# BOT_EXPOSE=direto). Unlike ./Caddyfile (Lightsail), the home router forwards neither
+# port 80 nor 443, so the site runs on the port in PUBLIC_ORIGIN (e.g.
+# https://share.iagofreire.dev:8443) and nothing listens on 80.
+{
+	auto_https disable_redirects
+}
+
+# PUBLIC_ORIGIN and CLOUDFLARE_API_TOKEN come from .env: start-bot.bat runs Caddy with
+# --envfile .env.
+{$PUBLIC_ORIGIN} {
+	tls {
+		# With 80 and 443 closed, Let's Encrypt can only check the domain through DNS: Caddy
+		# writes a TXT record with Cloudflare's API -- the same token the DDNS uses. Needs a
+		# Caddy built with caddy-dns/cloudflare (caddy add-package github.com/caddy-dns/cloudflare).
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+	# reverse_proxy upgrades WebSocket connections automatically -- /ws needs no
+	# special-casing here.
+	reverse_proxy localhost:3001
+}

@@ -24,7 +24,7 @@ import { isExeName, listAudioApps, startAppAudio, type AppAudioCapture } from ".
 import { buildContentSecurityPolicy, isAllowedPermission } from "./webSecurity";
 import { createSourceSelection, isSourceId, pickDisplayMedia, THUMBNAIL_SIZE, toDesktopSource } from "./capture";
 import { isAllowedNavigation } from "./navigation";
-import { resolveServerOrigin } from "./serverOrigin";
+import { pickServerOrigin, serverOriginCandidates } from "./serverOrigin";
 import { createUpdateTracker } from "./updates";
 import { mainWindowWebPreferences } from "./windowOptions";
 
@@ -34,8 +34,32 @@ import { mainWindowWebPreferences } from "./windowOptions";
  * can't: frameless window chrome, capture-source picking, the OAuth loopback, the tray.
  */
 
-const serverOrigin = resolveServerOrigin(process.env);
-const appUrl = `${serverOrigin}/desktop.html`;
+const serverCandidates = serverOriginCandidates(process.env);
+/** Picked at startup among serverCandidates (see pickServerOrigin); fixed for the session. */
+let serverOrigin = serverCandidates[0]!;
+let appUrl = `${serverOrigin}/desktop.html`;
+/** How long a candidate server gets to answer before it counts as down. */
+const SERVER_PROBE_TIMEOUT_MS = 4000;
+
+async function isServerUp(origin: string): Promise<boolean> {
+  const response = await fetch(`${origin}/api/config`, { signal: AbortSignal.timeout(SERVER_PROBE_TIMEOUT_MS) });
+  return response.ok;
+}
+
+/**
+ * The page failed to load: if the bot now answers at another candidate (it moved between
+ * the tunnel and the home port), start over there. Everything here -- CSP, permissions,
+ * navigation -- is bound to the origin picked at startup, so a restart is the clean switch.
+ */
+async function followMovedServer(): Promise<void> {
+  for (const origin of serverCandidates.filter((candidate) => candidate !== serverOrigin)) {
+    if (await isServerUp(origin).catch(() => false)) {
+      app.relaunch();
+      app.exit(0);
+      return;
+    }
+  }
+}
 
 /** Chromium's "navigation aborted" -- a redirect or a newer load, not a real failure. */
 const ERR_ABORTED = -3;
@@ -165,7 +189,9 @@ function createMainWindow(): BrowserWindow {
 
   // Server down or the tunnel offline: a local page with a retry button beats a blank window.
   window.webContents.on("did-fail-load", (_event, errorCode, _description, _url, isMainFrame) => {
-    if (isMainFrame && errorCode !== ERR_ABORTED) showOfflinePage(window);
+    if (!isMainFrame || errorCode === ERR_ABORTED) return;
+    showOfflinePage(window);
+    void followMovedServer();
   });
 
   void window.loadURL(appUrl);
@@ -418,7 +444,9 @@ if (!app.requestSingleInstanceLock()) {
   // Groups notifications under the app's name instead of "electron.app.Electron".
   app.setAppUserModelId(APP_USER_MODEL_ID);
 
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
+    serverOrigin = await pickServerOrigin(serverCandidates, isServerUp);
+    appUrl = `${serverOrigin}/desktop.html`;
     registerIpc();
     installWebSecurity();
     installDisplayMediaHandler();
