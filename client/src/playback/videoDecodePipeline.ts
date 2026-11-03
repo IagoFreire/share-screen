@@ -4,6 +4,7 @@ import {
   VIDEO_JITTER_BUFFER_SECONDS,
 } from "@screenshare-bot/shared";
 import { VIDEO_CODEC } from "../capture/videoEncodePipeline.js";
+import { createFrameRateMeter } from "./frameRate.js";
 import type { MediaClock } from "./mediaClock.js";
 
 export interface VideoChunkInput {
@@ -13,6 +14,10 @@ export interface VideoChunkInput {
 }
 
 export interface VideoPlaybackStats {
+  /** Frames actually drawn on screen per second, over the last second. */
+  shownFps: number;
+  /** Chunks arriving from the network per second: what the presenter is sending. */
+  receivedFps: number;
   /** Frames dropped because playback fell behind or the queue overflowed. */
   droppedFrames: number;
   /** Decoded frames waiting for their moment on screen. */
@@ -157,6 +162,8 @@ export async function startVideoDecodePipeline(
   let catchUps = 0;
   let lastMissedKeyframeAskAt = -Infinity;
   let hasDrawn = false;
+  const shownRate = createFrameRateMeter();
+  const receivedRate = createFrameRateMeter();
 
   // Maps stream timestamps onto local wall-clock time. Established from the first frame
   // and re-established whenever playback falls behind (see presentFrames).
@@ -174,6 +181,7 @@ export async function startVideoDecodePipeline(
       canvas.height = frame.displayHeight;
     }
     ctx!.drawImage(frame, 0, 0, canvas.width, canvas.height);
+    shownRate.tick();
     if (!hasDrawn) {
       hasDrawn = true;
       onFirstFrame?.();
@@ -415,6 +423,7 @@ export async function startVideoDecodePipeline(
   return {
     decodeChunk: (chunk) => {
       if (stopped) return;
+      receivedRate.tick();
       checkDecoderLag();
 
       // A decoder can only start on a keyframe; wait until one arrives (right after
@@ -453,6 +462,8 @@ export async function startVideoDecodePipeline(
       lastMissedKeyframeAskAt = performance.now(); // the caller asks for it (see streamReceiver.ts)
     },
     stats: () => ({
+      shownFps: shownRate.rate(),
+      receivedFps: receivedRate.rate(),
       droppedFrames,
       queuedFrames: queue.length,
       bufferedChunks: chunks.length,

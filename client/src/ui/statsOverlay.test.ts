@@ -8,6 +8,8 @@ describe("stats overlay", () => {
     const lines = formatPlaybackStats({
       audio: { leadMs: 301.6, underruns: 2, catchUps: 1, playbackRate: 1.0015, peakDb: -12.4 },
       video: {
+        shownFps: 58,
+        receivedFps: 60,
         droppedFrames: 9,
         queuedFrames: 5,
         bufferedChunks: 20,
@@ -24,7 +26,7 @@ describe("stats overlay", () => {
 
     expect(lines).toEqual([
       "Áudio: nível -12 dB · folga 302 ms · velocidade 1,0015× · falhas 2 · saltos ao vivo 1",
-      "Vídeo: fila 5 + 20 no buffer · descartados 9 · no decoder 1 (33 ms) · sobrecargas 0 · alcances 2",
+      "Vídeo: 58 fps na tela (60 recebidos) · fila 5 + 20 no buffer · descartados 9 · no decoder 1 (33 ms) · sobrecargas 0 · alcances 2",
       "Rede: atraso de fila 12 ms · quadros perdidos 1 · avisos de congestionamento 0",
       "Qualidade: camada 1 (automático)",
     ]);
@@ -40,13 +42,13 @@ describe("stats overlay", () => {
   it("flags a picture waiting for a keyframe", () => {
     const [, video] = formatPlaybackStats({
       audio: null,
-      video: { droppedFrames: 0, queuedFrames: 0, bufferedChunks: 0, decodeQueue: 0, decodeLagMs: 0, overloads: 0, catchUps: 0, waitingForKeyframe: true },
+      video: { shownFps: 0, receivedFps: 0, droppedFrames: 0, queuedFrames: 0, bufferedChunks: 0, decodeQueue: 0, decodeLagMs: 0, overloads: 0, catchUps: 0, waitingForKeyframe: true },
       receiver,
       layer: 0,
       autoLayer: false,
     });
 
-    expect(video).toBe("Vídeo: fila 0 + 0 no buffer · descartados 0 · no decoder 0 (0 ms) · sobrecargas 0 · alcances 0 · aguardando keyframe");
+    expect(video).toBe("Vídeo: 0 fps na tela (0 recebidos) · fila 0 + 0 no buffer · descartados 0 · no decoder 0 (0 ms) · sobrecargas 0 · alcances 0 · aguardando keyframe");
   });
 
   it("calls a silent stream silence, including the decoder's near-zero noise", () => {

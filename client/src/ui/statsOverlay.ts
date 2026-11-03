@@ -53,7 +53,7 @@ export function formatPlaybackStats({ audio, video, receiver, layer, autoLayer, 
       `falhas ${audio.underruns} · saltos ao vivo ${audio.catchUps}`
     : "Áudio: sem áudio";
   const videoLine = video
-    ? `Vídeo: fila ${video.queuedFrames} + ${video.bufferedChunks} no buffer · descartados ${video.droppedFrames} · no decoder ${video.decodeQueue} ` +
+    ? `Vídeo: ${Math.round(video.shownFps)} fps na tela (${Math.round(video.receivedFps)} recebidos) · fila ${video.queuedFrames} + ${video.bufferedChunks} no buffer · descartados ${video.droppedFrames} · no decoder ${video.decodeQueue} ` +
       `(${Math.round(video.decodeLagMs)} ms) · sobrecargas ${video.overloads} · alcances ${video.catchUps}` +
       (video.waitingForKeyframe ? " · aguardando keyframe" : "")
     : "Vídeo: sem vídeo";
