@@ -17,8 +17,8 @@ mod policy;
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -173,17 +173,48 @@ fn print_sessions(args: &Args) -> Res<()> {
     Ok(())
 }
 
-struct Source {
-    samples: Arc<Mutex<VecDeque<f32>>>,
-    stopped: Arc<AtomicBool>,
+/// One app's capture, shared by its capture thread, the mixer and the scanner.
+struct Capture {
+    samples: Mutex<VecDeque<f32>>,
+    stopped: AtomicBool,
     /// The capture ended with an error rather than being stopped.
-    failed: Arc<AtomicBool>,
+    failed: AtomicBool,
+    started: Instant,
+    /// When the mix last heard sound from it, in ms after `started` plus one; 0 = never.
+    audible_at: AtomicU64,
+}
+
+impl Capture {
+    fn new() -> Self {
+        Capture {
+            samples: Mutex::new(VecDeque::new()),
+            stopped: AtomicBool::new(false),
+            failed: AtomicBool::new(false),
+            started: Instant::now(),
+            audible_at: AtomicU64::new(0),
+        }
+    }
+
+    fn mark_audible(&self, at: Instant) {
+        let ms = at.saturating_duration_since(self.started).as_millis() as u64;
+        self.audible_at.store(ms + 1, Ordering::Relaxed);
+    }
+
+    /// Last time the capture delivered sound; None until it does.
+    fn last_audible(&self) -> Option<Instant> {
+        match self.audible_at.load(Ordering::Relaxed) {
+            0 => None,
+            ms => Some(self.started + Duration::from_millis(ms - 1)),
+        }
+    }
+}
+
+/// The mixer's own state for one capture.
+struct MixInput {
+    capture: Arc<Capture>,
     primed: bool,
     /// Reads the source at its sound card's pace rather than the mixer's.
     resampler: DriftResampler,
-    started: Instant,
-    /// Last time the capture delivered sound; None until it does.
-    last_audible: Option<Instant>,
 }
 
 fn read_f32_frames(bytes: &mut VecDeque<u8>, block_align: usize, out: &mut Vec<f32>) {
@@ -192,9 +223,9 @@ fn read_f32_frames(bytes: &mut VecDeque<u8>, block_align: usize, out: &mut Vec<f
     out.extend(drained.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])));
 }
 
-/// One process tree's audio, pushed into `samples` until `stopped` is set or the
+/// One process tree's audio, pushed into `source.samples` until it is stopped or the
 /// process goes away.
-fn capture_loop(pid: u32, samples: Arc<Mutex<VecDeque<f32>>>, stopped: Arc<AtomicBool>) -> Res<()> {
+fn capture_loop(pid: u32, source: &Capture) -> Res<()> {
     initialize_mta().ok()?;
     let format = WaveFormat::new(32, 32, &SampleType::Float, SAMPLE_RATE, CHANNELS, None);
     let block_align = format.get_blockalign() as usize;
@@ -207,7 +238,7 @@ fn capture_loop(pid: u32, samples: Arc<Mutex<VecDeque<f32>>>, stopped: Arc<Atomi
 
     let mut bytes = VecDeque::new();
     let mut decoded = Vec::new();
-    while !stopped.load(Ordering::Relaxed) {
+    while !source.stopped.load(Ordering::Relaxed) {
         // A timeout only means the app is silent right now.
         let _ = event.wait_for_event(EVENT_TIMEOUT_MS);
         while capture.get_next_packet_size()?.unwrap_or(0) > 0 {
@@ -218,7 +249,7 @@ fn capture_loop(pid: u32, samples: Arc<Mutex<VecDeque<f32>>>, stopped: Arc<Atomi
         if decoded.is_empty() {
             continue;
         }
-        let mut queue = samples.lock().map_err(|_| "sample queue poisoned")?;
+        let mut queue = source.samples.lock().map_err(|_| "sample queue poisoned")?;
         queue.extend(decoded.iter());
         let overflow = queue.len().saturating_sub(MAX_BUFFERED_SAMPLES);
         queue.drain(..overflow);
@@ -227,27 +258,17 @@ fn capture_loop(pid: u32, samples: Arc<Mutex<VecDeque<f32>>>, stopped: Arc<Atomi
     Ok(())
 }
 
-fn start_source(pid: u32) -> Source {
-    let samples = Arc::new(Mutex::new(VecDeque::new()));
-    let stopped = Arc::new(AtomicBool::new(false));
-    let failed = Arc::new(AtomicBool::new(false));
-    let (thread_samples, thread_stopped, thread_failed) = (Arc::clone(&samples), Arc::clone(&stopped), Arc::clone(&failed));
+fn start_source(pid: u32) -> Arc<Capture> {
+    let capture = Arc::new(Capture::new());
+    let thread_capture = Arc::clone(&capture);
     thread::spawn(move || {
-        if let Err(error) = capture_loop(pid, thread_samples, Arc::clone(&thread_stopped)) {
+        if let Err(error) = capture_loop(pid, &thread_capture) {
             eprintln!("capture of process {pid} ended: {error}");
-            thread_failed.store(true, Ordering::Relaxed);
+            thread_capture.failed.store(true, Ordering::Relaxed);
         }
-        thread_stopped.store(true, Ordering::Relaxed);
+        thread_capture.stopped.store(true, Ordering::Relaxed);
     });
-    Source {
-        samples,
-        stopped,
-        failed,
-        primed: false,
-        resampler: DriftResampler::new(),
-        started: Instant::now(),
-        last_audible: None,
-    }
+    capture
 }
 
 /// What the helper learns about the apps over one capture.
@@ -275,7 +296,7 @@ fn report_status(
     system: &System,
     candidates: &[(u32, Vec<u32>)],
     roots: &[u32],
-    sources: &HashMap<u32, Source>,
+    sources: &HashMap<u32, Arc<Capture>>,
     health: &mut Health,
     now: Instant,
 ) {
@@ -289,7 +310,7 @@ fn report_status(
             *reason
         } else if !roots.contains(pid) {
             "covered"
-        } else if sources.get(pid).and_then(|source| source.last_audible).is_some_and(|at| now - at < RECENT_SOUND) {
+        } else if sources.get(pid).and_then(|source| source.last_audible()).is_some_and(|at| now - at < RECENT_SOUND) {
             "ok"
         } else if health.playing_since.get(pid).is_some_and(|since| now - *since >= PLAYING_FOR) {
             "muted"
@@ -317,8 +338,11 @@ fn report_status(
 
 /// Opens captures for newly playing apps and closes the ones that went away or that
 /// a parent capture now covers.
-fn rescan(sources: &mut HashMap<u32, Source>, policy: &ExclusionPolicy, system: &mut System, health: &mut Health) -> Res<()> {
-    system.refresh_processes(ProcessesToUpdate::All, true);
+fn rescan(sources: &mut HashMap<u32, Arc<Capture>>, policy: &ExclusionPolicy, system: &mut System, health: &mut Health) -> Res<()> {
+    // Names and parents only. The default refresh also reads every process's CPU, memory,
+    // disk and path, which took 1.8-6 s with every core busy (a game running) -- and while
+    // this ran on the mixer's thread, the live's sound stopped for that long.
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
     let table: Vec<ProcessInfo> = system
         .processes()
         .keys()
@@ -358,7 +382,7 @@ fn rescan(sources: &mut HashMap<u32, Source>, policy: &ExclusionPolicy, system: 
     let running: Vec<RootHealth> = sources
         .iter()
         .filter(|(_, source)| !source.stopped.load(Ordering::Relaxed))
-        .map(|(pid, source)| RootHealth { pid: *pid, silent_for: now - source.last_audible.unwrap_or(source.started) })
+        .map(|(pid, source)| RootHealth { pid: *pid, silent_for: now - source.last_audible().unwrap_or(source.started) })
         .collect();
     let playing: Vec<(u32, Vec<u32>)> = candidates
         .iter()
@@ -397,10 +421,10 @@ fn rescan(sources: &mut HashMap<u32, Source>, policy: &ExclusionPolicy, system: 
     Ok(())
 }
 
-fn mix_block(sources: &mut HashMap<u32, Source>) -> Vec<f32> {
+fn mix_block(inputs: &mut HashMap<u32, MixInput>) -> Vec<f32> {
     let mut mix = vec![0.0f32; BLOCK_SAMPLES];
-    for source in sources.values_mut() {
-        let Ok(mut queue) = source.samples.lock() else { continue };
+    for source in inputs.values_mut() {
+        let Ok(mut queue) = source.capture.samples.lock() else { continue };
         if !source.primed {
             source.primed = queue.len() >= PRIME_SAMPLES;
             if !source.primed {
@@ -409,7 +433,7 @@ fn mix_block(sources: &mut HashMap<u32, Source>) -> Vec<f32> {
         }
         let chunk = source.resampler.pull(&mut queue, BLOCK_FRAMES, TARGET_FRAMES);
         if chunk.iter().any(|sample| sample.abs() > AUDIBLE_SAMPLE) {
-            source.last_audible = Some(Instant::now());
+            source.capture.mark_audible(Instant::now());
         }
         mix_into(&mut mix, &chunk);
         if chunk.len() < BLOCK_SAMPLES {
@@ -422,6 +446,41 @@ fn mix_block(sources: &mut HashMap<u32, Source>) -> Vec<f32> {
     mix
 }
 
+/// The captures the mixer should read: (pid, capture) for every capture root.
+type Roster = Vec<(u32, Arc<Capture>)>;
+
+/// Brings the mixer's inputs in line with the latest roster. A capture it already reads
+/// keeps its cushion and resampler; a new one starts priming.
+fn apply_roster(inputs: &mut HashMap<u32, MixInput>, roster: Roster) {
+    inputs.retain(|pid, input| roster.iter().any(|(p, capture)| p == pid && Arc::ptr_eq(capture, &input.capture)));
+    for (pid, capture) in roster {
+        inputs.entry(pid).or_insert_with(|| MixInput { capture, primed: false, resampler: DriftResampler::new() });
+    }
+}
+
+/// Finds the apps to capture, once a second, on a thread of its own: scanning processes
+/// and audio sessions can take a long while on a busy PC, and the mixer must never wait
+/// for it -- every 10 ms block it holds back is a gap in the live's sound.
+fn scan_loop(policy: ExclusionPolicy, rosters: mpsc::Sender<Roster>) {
+    if let Err(error) = initialize_mta().ok() {
+        eprintln!("session scanner failed to start: {error}");
+        return;
+    }
+    let mut system = process_table();
+    let mut sources: HashMap<u32, Arc<Capture>> = HashMap::new();
+    let mut health = Health::default();
+    loop {
+        if let Err(error) = rescan(&mut sources, &policy, &mut system, &mut health) {
+            eprintln!("session scan failed: {error}");
+        }
+        let roster = sources.iter().map(|(pid, capture)| (*pid, Arc::clone(capture))).collect();
+        if rosters.send(roster).is_err() {
+            return; // the mixer is gone
+        }
+        thread::sleep(RESCAN_INTERVAL);
+    }
+}
+
 fn run_capture(args: &Args) -> Res<()> {
     // The app closes our stdin when it stops the live or quits; nothing else should
     // keep this process alive and capturing.
@@ -432,23 +491,20 @@ fn run_capture(args: &Args) -> Res<()> {
     });
 
     let policy = ExclusionPolicy::new(&args.exclude, args.exclude_pid);
-    let mut system = process_table();
-    let mut sources: HashMap<u32, Source> = HashMap::new();
-    let mut health = Health::default();
+    let (roster_sender, rosters) = mpsc::channel();
+    thread::spawn(move || scan_loop(policy, roster_sender));
+
+    let mut inputs: HashMap<u32, MixInput> = HashMap::new();
     let mut stdout = io::stdout().lock();
-    let mut last_scan: Option<Instant> = None;
     let mut schedule_start = Instant::now();
     let mut blocks_written: u32 = 0;
 
     loop {
-        if last_scan.is_none_or(|at| at.elapsed() >= RESCAN_INTERVAL) {
-            if let Err(error) = rescan(&mut sources, &policy, &mut system, &mut health) {
-                eprintln!("session scan failed: {error}");
-            }
-            last_scan = Some(Instant::now());
+        if let Some(roster) = rosters.try_iter().last() {
+            apply_roster(&mut inputs, roster);
         }
 
-        let bytes: Vec<u8> = mix_block(&mut sources).iter().flat_map(|s| s.to_le_bytes()).collect();
+        let bytes: Vec<u8> = mix_block(&mut inputs).iter().flat_map(|s| s.to_le_bytes()).collect();
         if stdout.write_all(&bytes).and_then(|()| stdout.flush()).is_err() {
             return Ok(()); // the app stopped reading
         }
@@ -462,6 +518,53 @@ fn run_capture(args: &Args) -> Res<()> {
             schedule_start = now;
             blocks_written = 0;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_capture_remembers_when_it_was_last_heard() {
+        let capture = Capture::new();
+        assert_eq!(capture.last_audible(), None);
+
+        let heard = capture.started + Duration::from_millis(1500);
+        capture.mark_audible(heard);
+
+        assert_eq!(capture.last_audible(), Some(heard));
+    }
+
+    #[test]
+    fn the_roster_keeps_a_running_input_and_its_cushion() {
+        let kept = Arc::new(Capture::new());
+        let mut inputs = HashMap::new();
+        apply_roster(&mut inputs, vec![(1, Arc::clone(&kept))]);
+        inputs.get_mut(&1).unwrap().primed = true;
+
+        apply_roster(&mut inputs, vec![(1, Arc::clone(&kept))]);
+
+        assert!(inputs[&1].primed);
+    }
+
+    #[test]
+    fn the_roster_adds_new_captures_and_drops_gone_or_replaced_ones() {
+        let gone = Arc::new(Capture::new());
+        let replaced = Arc::new(Capture::new());
+        let mut inputs = HashMap::new();
+        apply_roster(&mut inputs, vec![(1, gone), (2, replaced)]);
+        inputs.get_mut(&2).unwrap().primed = true;
+
+        let fresh = Arc::new(Capture::new());
+        let added = Arc::new(Capture::new());
+        apply_roster(&mut inputs, vec![(2, Arc::clone(&fresh)), (3, Arc::clone(&added))]);
+
+        let mut pids: Vec<u32> = inputs.keys().copied().collect();
+        pids.sort();
+        assert_eq!(pids, vec![2, 3]);
+        assert!(Arc::ptr_eq(&inputs[&2].capture, &fresh));
+        assert!(!inputs[&2].primed, "a new capture under an old pid primes from scratch");
     }
 }
 
