@@ -94,7 +94,25 @@ export interface QualityPreset {
   height: number;
   framerate: number;
   bitrateKbps: number;
+  /** false sends this version alone: no lighter simulcast layers (see planLayers). */
+  simulcast?: boolean;
+  /** true asks for the GPU encoder, and Baseline if it falls back to the CPU (encoderChoice.ts). */
+  lowPower?: boolean;
 }
+
+/**
+ * "Potato": the cheapest live that still looks decent. 720p30 captured already scaled
+ * down, one encoder (no simulcast layers) on the GPU when there is one, and a bitrate
+ * well under 720p30 "balanced" -- screen content stays readable, fast games get softer.
+ * For a weak PC or a slow upload.
+ */
+export const POTATO_PRESET: QualityPreset = {
+  ...RESOLUTIONS["720p"],
+  framerate: 30,
+  bitrateKbps: 1500,
+  simulcast: false,
+  lowPower: true,
+};
 
 export function buildQualityPreset(
   resolution: ResolutionKey,
@@ -117,6 +135,7 @@ const SIMULCAST_LOWER_LAYERS: ReadonlyArray<{ resolution: ResolutionKey; framera
 ];
 
 export function planLayers(top: QualityPreset): QualityPreset[] {
+  if (top.simulcast === false) return [top];
   const lower = SIMULCAST_LOWER_LAYERS.map(({ resolution, framerate }) => buildQualityPreset(resolution, framerate))
     .filter((layer) => layer.height < top.height);
   return [top, ...lower];

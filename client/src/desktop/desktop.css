@@ -962,6 +962,65 @@ body.desktop :focus-visible {
   color: #fff;
 }
 
+/* Modo Potato on: the custom picks stay visible but read as overridden. */
+.desk-chip:disabled {
+  cursor: not-allowed;
+}
+
+.desk-quality-custom.is-locked,
+.desk-chips.is-locked {
+  opacity: 0.45;
+}
+
+.desk-chip:disabled:hover {
+  color: var(--desk-text-muted);
+  border-color: var(--desk-bg-raised);
+}
+
+.desk-chip.is-on:disabled:hover {
+  color: #fff;
+  border-color: var(--desk-blurple);
+}
+
+/* "Qualidade" label with the Potato chip on the same line. */
+.desk-quality-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.desk-quality-head .desk-label {
+  margin: 0;
+}
+
+.desk-potato {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px 3px 7px;
+  border: 1px solid var(--desk-bg-raised);
+  border-radius: 999px;
+  background: var(--desk-bg-sidebar);
+  color: var(--desk-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--desk-fast) linear, border-color var(--desk-fast) linear, color var(--desk-fast) linear;
+}
+
+.desk-potato:hover {
+  color: var(--desk-text);
+  border-color: var(--desk-bg-active);
+}
+
+.desk-potato.is-on {
+  border-color: var(--desk-green);
+  background: rgba(35, 165, 89, 0.15);
+  color: #fff;
+}
+
 .desk-estimate {
   margin: 4px 0 20px;
   padding: 8px 10px;

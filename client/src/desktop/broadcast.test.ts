@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildQualityPreset, type ControlMessage } from "@screenshare-bot/shared";
+import { buildQualityPreset, POTATO_PRESET, type ControlMessage, type QualityPreset } from "@screenshare-bot/shared";
 import type { WsClientHandlers } from "../net/wsClient.js";
 import type { PresenterSession } from "../session/presenterSession.js";
 import { audioEncodingFor, startDesktopBroadcast, type BroadcastFactories, type BroadcastOptions } from "./broadcast.js";
@@ -18,9 +18,10 @@ describe("audioEncodingFor", () => {
 const QUALITY = buildQualityPreset("720p", 30, "balanced");
 const TARGET = { roomId: "c1", guildId: "g1" };
 
-function setup() {
+function setup(quality: QualityPreset = QUALITY) {
   let handlers: WsClientHandlers | null = null;
   const sentControls: ControlMessage[] = [];
+  const startedLayers: Array<QualityPreset[] | undefined> = [];
   let wsClosed = 0;
   let sessionStops = 0;
   const interruptions: string[] = [];
@@ -28,7 +29,10 @@ function setup() {
 
   const session: PresenterSession = {
     isPresenting: true,
-    start: async () => ({ hasAudio: true }),
+    start: async (_quality, layers) => {
+      startedLayers.push(layers);
+      return { hasAudio: true };
+    },
     stop: () => {
       sessionStops += 1;
     },
@@ -65,7 +69,7 @@ function setup() {
   };
 
   async function goLive() {
-    const pending = startDesktopBroadcast("screen:0:0", QUALITY, TARGET, options, factories);
+    const pending = startDesktopBroadcast("screen:0:0", quality, TARGET, options, factories);
     await Promise.resolve();
     await Promise.resolve();
     handlers!.onControl({ kind: "joined", roomId: "c1", streams: [], viewerCount: 1, isAdmin: false });
@@ -81,6 +85,7 @@ function setup() {
     goLive,
     handlers: () => handlers!,
     sentControls,
+    startedLayers,
     wsClosed: () => wsClosed,
     sessionStops: () => sessionStops,
     interruptions,
@@ -94,6 +99,20 @@ describe("desktop broadcast", () => {
     await goLive();
 
     expect(sentControls[0]).toMatchObject({ kind: "join", roomId: "c1", session: "signed", presenterOnly: true });
+  });
+
+  it("sends simulcast layers under a normal quality", async () => {
+    const { goLive, startedLayers } = setup(buildQualityPreset("1080p", 60, "balanced"));
+    await goLive();
+
+    expect(startedLayers[0]?.map((layer) => layer.height)).toEqual([1080, 720, 480]);
+  });
+
+  it("Potato goes live as a single 720p version", async () => {
+    const { goLive, startedLayers } = setup(POTATO_PRESET);
+    await goLive();
+
+    expect(startedLayers[0]).toEqual([POTATO_PRESET]);
   });
 
   it("a dropped connection while live ends the broadcast and says why", async () => {

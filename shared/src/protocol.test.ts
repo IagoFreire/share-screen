@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildQualityPreset, planLayers } from "./constants.js";
+import { buildQualityPreset, planLayers, POTATO_PRESET } from "./constants.js";
 import { decodeFrame, encodeFrame, FrameType } from "./protocol.js";
 
 describe("frame encoding", () => {
@@ -49,5 +49,14 @@ describe("planLayers", () => {
   it("only keeps layers below the top one", () => {
     expect(planLayers(buildQualityPreset("720p", 30, "balanced")).map((layer) => layer.height)).toEqual([720, 480]);
     expect(planLayers(buildQualityPreset("480p", 60, "balanced")).map((layer) => layer.height)).toEqual([480]);
+  });
+
+  it("sends the Potato preset as one 720p30 version with no lighter layers", () => {
+    expect(POTATO_PRESET.height).toBe(720);
+    expect(POTATO_PRESET.framerate).toBe(30);
+    expect(POTATO_PRESET.bitrateKbps).toBeLessThan(buildQualityPreset("720p", 30, "balanced").bitrateKbps);
+    expect(planLayers(POTATO_PRESET)).toEqual([POTATO_PRESET]);
+    expect(POTATO_PRESET.lowPower).toBe(true);
+    expect(buildQualityPreset("720p", 30, "balanced").lowPower).toBeUndefined();
   });
 });

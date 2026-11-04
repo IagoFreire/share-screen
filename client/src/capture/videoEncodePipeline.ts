@@ -5,11 +5,13 @@ import {
   TARGET_VIDEO_BITRATE_KBPS_DEFAULT,
   VIDEO_FRAMERATE_DEFAULT,
 } from "@screenshare-bot/shared";
+import { encoderAttempts, VIDEO_CODEC_HIGH } from "./encoderChoice.js";
 
 // H.264 High profile, Level 5.1 -- supports 1080p60. Chosen over VP9/AV1 for the widest
 // hardware-decode compatibility across whatever Chromium build Discord's desktop client
-// embeds (see plan risk: "browser codec support variance").
-export const VIDEO_CODEC = "avc1.640033";
+// embeds (see plan risk: "browser codec support variance"). Viewers decode with this;
+// Potato may encode Constrained Baseline instead, which it also plays (encoderChoice.ts).
+export const VIDEO_CODEC = VIDEO_CODEC_HIGH;
 
 export type EncodedVideoHandler = (chunk: EncodedVideoChunk) => void;
 
@@ -95,30 +97,39 @@ export async function startVideoEncodePipeline(
    * requested preset, and a shared window that gets resized mid-broadcast triggers a
    * reconfigure instead of silently distorting from then on.
    */
-  async function configureFor(width: number, height: number, bitrate: number): Promise<void> {
-    const encoderConfig: VideoEncoderConfig = {
-      codec: VIDEO_CODEC,
-      width: toEven(width),
-      height: toEven(height),
-      framerate: options.quality?.framerate ?? VIDEO_FRAMERATE_DEFAULT,
-      bitrate,
-      bitrateMode: "variable",
-      latencyMode: "realtime",
-      hardwareAcceleration: failures >= SOFTWARE_FALLBACK_AFTER_FAILURES ? "prefer-software" : "no-preference",
-      // Annex B makes every keyframe self-contained (inline SPS/PPS + start codes) so the
-      // relay can forward raw chunks over WS with no out-of-band description -- the default
-      // "avc" (AVCC) format instead requires a separate decoderConfig.description that we
-      // never captured/forwarded, which is why the decoder rejected every "keyframe" as
-      // invalid ("A key frame is required after configure()"). It also lets viewers pick
-      // up a mid-stream resolution change from the inline parameter sets.
-      avc: { format: "annexb" },
-    };
-
-    const support = await VideoEncoder.isConfigSupported(encoderConfig);
-    if (!support.supported) {
-      throw new Error(`VideoEncoder config not supported by this browser: ${JSON.stringify(encoderConfig)}`);
+  /** The first encoder setup (see encoderAttempts) this browser supports for these settings. */
+  async function supportedConfig(width: number, height: number, bitrate: number): Promise<VideoEncoderConfig> {
+    const attempts = encoderAttempts({
+      lowPower: options.quality?.lowPower === true,
+      softwareOnly: failures >= SOFTWARE_FALLBACK_AFTER_FAILURES,
+    });
+    const tried: VideoEncoderConfig[] = [];
+    for (const attempt of attempts) {
+      const encoderConfig: VideoEncoderConfig = {
+        ...attempt,
+        width: toEven(width),
+        height: toEven(height),
+        framerate: options.quality?.framerate ?? VIDEO_FRAMERATE_DEFAULT,
+        bitrate,
+        bitrateMode: "variable",
+        latencyMode: "realtime",
+        // Annex B makes every keyframe self-contained (inline SPS/PPS + start codes) so the
+        // relay can forward raw chunks over WS with no out-of-band description -- the default
+        // "avc" (AVCC) format instead requires a separate decoderConfig.description that we
+        // never captured/forwarded, which is why the decoder rejected every "keyframe" as
+        // invalid ("A key frame is required after configure()"). It also lets viewers pick
+        // up a mid-stream resolution change from the inline parameter sets.
+        avc: { format: "annexb" },
+      };
+      const support = await VideoEncoder.isConfigSupported(encoderConfig);
+      if (support.supported) return encoderConfig;
+      tried.push(encoderConfig);
     }
+    throw new Error(`VideoEncoder config not supported by this browser: ${JSON.stringify(tried)}`);
+  }
 
+  async function configureFor(width: number, height: number, bitrate: number): Promise<void> {
+    const encoderConfig = await supportedConfig(width, height, bitrate);
     encoder.configure(encoderConfig);
     configuredWidth = encoderConfig.width;
     configuredHeight = encoderConfig.height;

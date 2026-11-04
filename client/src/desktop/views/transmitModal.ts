@@ -3,6 +3,7 @@ import {
   AUDIO_QUALITY_PRESETS,
   buildQualityPreset,
   planLayers,
+  POTATO_PRESET,
   type AudioApp,
   type AudioQualityKey,
   type BitrateLevelKey,
@@ -29,9 +30,13 @@ interface QualityChoice {
   resolution: ResolutionKey;
   fps: FramerateKey;
   bitrate: BitrateLevelKey;
+  /** "Modo Potato": overrides the three above with POTATO_PRESET and the lightest sound. */
+  potato: boolean;
 }
 
-const DEFAULT_CHOICE: QualityChoice = { resolution: "1080p", fps: 60, bitrate: "balanced" };
+const DEFAULT_CHOICE: QualityChoice = { resolution: "1080p", fps: 60, bitrate: "balanced", potato: false };
+/** The sound Potato always sends: the cheapest Opus setting. */
+const POTATO_AUDIO_QUALITY: AudioQualityKey = "light";
 const RESOLUTION_OPTIONS: ResolutionKey[] = ["480p", "720p", "1080p"];
 const FPS_OPTIONS: FramerateKey[] = [30, 60];
 const BITRATE_OPTIONS: Array<{ key: BitrateLevelKey; label: string }> = [
@@ -51,10 +56,15 @@ function loadChoice(): QualityChoice {
       bitrate: BITRATE_OPTIONS.some((option) => option.key === saved.bitrate)
         ? (saved.bitrate as BitrateLevelKey)
         : DEFAULT_CHOICE.bitrate,
+      potato: saved.potato === true,
     };
   } catch {
     return DEFAULT_CHOICE;
   }
+}
+
+function qualityFor(choice: QualityChoice): QualityPreset {
+  return choice.potato ? POTATO_PRESET : buildQualityPreset(choice.resolution, choice.fps, choice.bitrate);
 }
 
 function saveChoice(choice: QualityChoice): void {
@@ -74,7 +84,7 @@ function uploadEstimate(quality: QualityPreset, audioKbps: number): string {
   const choice =
     versions.length > 1
       ? `quem assiste escolhe entre ${versions.slice(0, -1).join(", ")} e ${versions[versions.length - 1]}`
-      : "uma versão só";
+      : `uma versão só (${versions[0]})`;
   return `~${mbps} Mbps de upload · ${choice}`;
 }
 
@@ -247,10 +257,16 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
       });
   }
 
+  /** What the sound encodes at: Potato pins the lightest one without touching the saved pick. */
+  function effectiveAudioQuality(): AudioQualityKey {
+    return choice.potato ? POTATO_AUDIO_QUALITY : audioQuality;
+  }
+
   function audioChoice(): AudioChoice {
     if (!audio) return { mode: "off" };
-    if (appsUnavailable) return { mode: "system", quality: audioQuality };
-    return { mode: "apps", exclude: [...excluded], quality: audioQuality };
+    const quality = effectiveAudioQuality();
+    if (appsUnavailable) return { mode: "system", quality };
+    return { mode: "apps", exclude: [...excluded], quality };
   }
 
   function toggleApp(exe: string): void {
@@ -310,11 +326,18 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
     if (event.key === "Escape" && !busy) close();
   }
 
-  function chip<T>(label: string, value: T, current: T, onPick: (value: T) => void): HTMLButtonElement {
+  /** A locked chip (Potato on) still shows the pick, but can't be changed. */
+  function chip<T>(label: string, value: T, current: T, onPick: (value: T) => void, locked = false): HTMLButtonElement {
     const isOn = value === current;
     return h(
       "button",
-      { class: `desk-chip${isOn ? " is-on" : ""}`, type: "button", "aria-pressed": isOn ? "true" : "false", onClick: () => onPick(value) },
+      {
+        class: `desk-chip${isOn ? " is-on" : ""}`,
+        type: "button",
+        "aria-pressed": isOn ? "true" : "false",
+        disabled: locked,
+        onClick: () => onPick(value),
+      },
       label,
     );
   }
@@ -325,34 +348,65 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
     renderQuality();
   }
 
+  /** A small toggle chip beside the "Qualidade" label; the estimate line says what it sends. */
+  function renderPotato(): HTMLElement {
+    return h(
+      "button",
+      {
+        class: `desk-potato${choice.potato ? " is-on" : ""}`,
+        type: "button",
+        "aria-pressed": choice.potato ? "true" : "false",
+        title: "Modo Potato: 720p 30 fps numa versão só e som leve. O mínimo de processador e internet.",
+        onClick: () => {
+          setChoice({ potato: !choice.potato });
+          // The sound section shows the quality Potato pins.
+          renderAudio();
+        },
+      },
+      h("span", { "aria-hidden": "true" }, "🥔"),
+      "Potato",
+    );
+  }
+
   function renderQuality(): void {
+    const locked = choice.potato;
     qualityBox.replaceChildren(
-      h("p", { class: "desk-label" }, "Qualidade"),
-      h("div", { class: "desk-chips" }, ...RESOLUTION_OPTIONS.map((r) => chip(r, r, choice.resolution, (resolution) => setChoice({ resolution })))),
-      h("div", { class: "desk-chips" }, ...FPS_OPTIONS.map((f) => chip(`${f} fps`, f, choice.fps, (fps) => setChoice({ fps })))),
-      h("div", { class: "desk-chips" }, ...BITRATE_OPTIONS.map((b) => chip(b.label, b.key, choice.bitrate, (bitrate) => setChoice({ bitrate })))),
+      h("div", { class: "desk-quality-head" }, h("p", { class: "desk-label" }, "Qualidade"), renderPotato()),
+      h(
+        "div",
+        { class: `desk-quality-custom${locked ? " is-locked" : ""}` },
+        h("div", { class: "desk-chips" }, ...RESOLUTION_OPTIONS.map((r) => chip(r, r, choice.resolution, (resolution) => setChoice({ resolution }), locked))),
+        h("div", { class: "desk-chips" }, ...FPS_OPTIONS.map((f) => chip(`${f} fps`, f, choice.fps, (fps) => setChoice({ fps }), locked))),
+        h("div", { class: "desk-chips" }, ...BITRATE_OPTIONS.map((b) => chip(b.label, b.key, choice.bitrate, (bitrate) => setChoice({ bitrate }), locked))),
+      ),
     );
     renderEstimate();
   }
 
   function renderEstimate(): void {
-    const audioKbps = audio ? AUDIO_QUALITY_PRESETS[audioQuality].bitrateKbps : 0;
-    estimate.textContent = uploadEstimate(buildQualityPreset(choice.resolution, choice.fps, choice.bitrate), audioKbps);
+    const audioKbps = audio ? AUDIO_QUALITY_PRESETS[effectiveAudioQuality()].bitrateKbps : 0;
+    estimate.textContent = uploadEstimate(qualityFor(choice), audioKbps);
   }
 
   function renderAudioQuality(): HTMLElement {
-    const picked = AUDIO_QUALITY_OPTIONS.find((option) => option.key === audioQuality)!;
+    const current = effectiveAudioQuality();
+    const picked = AUDIO_QUALITY_OPTIONS.find((option) => option.key === current)!;
     const pick = (quality: AudioQualityKey) => {
       audioQuality = quality;
       saveAudioQuality(quality);
       renderAudio();
     };
+    const hint = choice.potato ? "fixo no Modo Potato" : picked.hint;
     return h(
       "div",
       { class: "desk-audio-quality" },
       h("p", { class: "desk-label" }, "Qualidade do som"),
-      h("div", { class: "desk-chips" }, ...AUDIO_QUALITY_OPTIONS.map((option) => chip(option.label, option.key, audioQuality, pick))),
-      h("p", { class: "desk-audio-note" }, `${AUDIO_QUALITY_PRESETS[audioQuality].bitrateKbps} kbps · ${picked.hint}`),
+      h(
+        "div",
+        { class: `desk-chips${choice.potato ? " is-locked" : ""}` },
+        ...AUDIO_QUALITY_OPTIONS.map((option) => chip(option.label, option.key, current, pick, choice.potato)),
+      ),
+      h("p", { class: "desk-audio-note" }, `${AUDIO_QUALITY_PRESETS[current].bitrateKbps} kbps · ${hint}`),
     );
   }
 
@@ -461,7 +515,7 @@ export function openTransmitModal(api: DesktopApi, options: TransmitModalOptions
     error.textContent = "";
     syncGoLive();
     options
-      .onGoLive(selectedId, buildQualityPreset(choice.resolution, choice.fps, choice.bitrate), audioChoice())
+      .onGoLive(selectedId, qualityFor(choice), audioChoice())
       .then(close)
       .catch((reason: unknown) => {
         busy = false;
