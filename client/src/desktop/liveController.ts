@@ -1,10 +1,10 @@
 import type { AudioQualityKey, QualityPreset } from "@screenshare-bot/shared";
-import type { VoiceState } from "./voicePoller.js";
+import type { Whereabouts } from "./livePlace.js";
 
 /**
  * The desktop app's "am I live?" state: starts and ends the broadcast, keeps the tray
- * in step, and -- since the app can't stop you leaving the voice channel in Discord --
- * asks once whether to end the broadcast when you do, instead of ending it behind your
+ * in step, and -- since the app can't stop you leaving the voice channel in Discord, or
+ * the voice room the live went to -- asks once whether to end the broadcast when you do, instead of ending it behind your
  * back or leaving it running unnoticed.
  */
 
@@ -46,7 +46,8 @@ export interface LiveController {
   readonly isLive: boolean;
   goLive(sourceId: string, quality: QualityPreset, target: BroadcastTarget, audio?: AudioChoice): Promise<void>;
   end(): void;
-  onVoiceState(state: VoiceState): Promise<void>;
+  /** Where you are now (livePlace.ts); leaving the live's room asks whether to end it. */
+  onWhereabouts(where: Whereabouts): Promise<void>;
   /** Notified whenever isLive flips, so the UI can redraw. */
   onChange(listener: () => void): void;
 }
@@ -93,11 +94,11 @@ export function createLiveController(deps: LiveControllerDeps): LiveController {
 
     end,
 
-    async onVoiceState(state) {
+    async onWhereabouts(where) {
       if (!broadcast || !target) return;
-      const stillThere = state.status === "in-channel" && state.location.channelId === target.roomId;
-      // "unknown" only happens before the first poll; it says nothing about leaving.
-      if (stillThere || state.status === "unknown") {
+      const stillThere = where.roomIds.includes(target.roomId);
+      // Not knowing yet (first poll, voice socket reconnecting) says nothing about leaving.
+      if (stillThere || !where.known) {
         askedAboutLeaving = false;
         return;
       }

@@ -145,7 +145,7 @@ export interface StreamInfo {
  * ids are always present so the UI can fall back to them rather than showing nothing.
  */
 export interface ActiveBroadcast {
-  /** Voice channel id, which is what a room is keyed by. */
+  /** Voice channel id, which is what a room is keyed by -- or voiceLiveRoomId() for a desktop voice room. */
   roomId: string;
   guildId: string | null;
   guildName: string | null;

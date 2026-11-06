@@ -47,6 +47,14 @@ function cleanName(raw: string): string {
 
 const DISABLED = "As salas de voz estão desativadas.";
 
+/** Marks who is live in each room, given who broadcasts to each room's relay room. */
+export function withLives(rooms: VoiceRoomInfo[], liveUsersIn: (roomId: string) => ReadonlySet<string>): VoiceRoomInfo[] {
+  return rooms.map((room) => {
+    const live = liveUsersIn(room.id);
+    return { ...room, members: room.members.map((member) => ({ ...member, live: live.has(member.userId) })) };
+  });
+}
+
 export class VoiceRooms<C> {
   private readonly rooms: Array<Room<C>> = [];
   /** Off until an admin turns voice rooms on for everyone; while off, none exist and none can be made. */
@@ -125,6 +133,16 @@ export class VoiceRooms<C> {
     const room = this.roomWith(conn);
     if (!room) return [];
     return room.seats.filter((seat) => seat.conn !== conn && !seat.member.deafened).map((seat) => seat.conn);
+  }
+
+  /** Whether `userId` is seated in `roomId` -- who may watch and broadcast that room's lives. */
+  hasMember(roomId: string, userId: string): boolean {
+    const room = this.rooms.find((candidate) => candidate.id === roomId);
+    return room?.seats.some((seat) => seat.member.userId === userId) ?? false;
+  }
+
+  nameOf(roomId: string): string | null {
+    return this.rooms.find((candidate) => candidate.id === roomId)?.name ?? null;
   }
 
   list(): VoiceRoomInfo[] {

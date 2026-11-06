@@ -75,4 +75,8 @@ describe("buildSidebarModel", () => {
     expect(model[0].channels[0]).toMatchObject({ name: "Canal de voz", isMine: false });
     expect(model[0].channels[0].presenters[0].name).toBe("Alguém");
   });
+
+  it("leaves voice-room lives out: they show under their room", () => {
+    expect(buildSidebarModel({ location: null, broadcasts: [broadcast({ roomId: "voice:r1", guildId: null })] })).toEqual([]);
+  });
 });

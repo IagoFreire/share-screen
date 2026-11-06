@@ -2,16 +2,22 @@ import type { ActiveBroadcast, DesktopApi, StoredLogin } from "@screenshare-bot/
 import { mountWatchView, type WatchView } from "../watchView.js";
 import type { LiveAudience } from "./broadcast.js";
 import { h } from "./dom.js";
+import { playerPlace, transmitPlace, whereabouts, type LivePlace, type PlaceInput, type Whereabouts } from "./livePlace.js";
 import { buildSidebarModel, type SidebarChannel } from "./sidebarModel.js";
 import { createVoicePoller, VOICE_POLL_INTERVAL_MS, type VoiceState } from "./voicePoller.js";
 import { emptyState, renderChannels, renderMainHeader, renderRail, renderUserPanel } from "./views/shell.js";
 import type { VoiceUi } from "./views/voiceUi.js";
+import type { VoiceSession } from "../voice/voiceSession.js";
 
 /**
  * The logged-in desktop window: voice-channel tracking, the sidebar, and the embedded
- * player. The player connection follows the user's voice channel -- joining another
- * channel in Discord moves the app there on the next poll.
+ * player. The player connection follows where the user is (livePlace.ts): the app's
+ * voice room they sit in, else their Discord voice channel -- joining another channel
+ * in Discord moves the app there on the next poll -- else, for an admin, the lobby.
  */
+
+/** A voice room the server hasn't listed yet (the seat arrived first). */
+const UNLISTED_ROOM_NAME = "Sala de voz";
 
 /** How often the sidebar's broadcast list is refreshed while a channel is open. */
 const BROADCASTS_POLL_INTERVAL_MS = 5000;
@@ -21,6 +27,8 @@ interface AppState {
   broadcasts: ActiveBroadcast[];
   selectedGuildId: string | null;
   watching: { roomId: string; slot: number } | null;
+  /** Where the player is connected; null when it isn't. */
+  place: LivePlace | null;
 }
 
 export interface DesktopAppHooks {
@@ -31,15 +39,19 @@ export interface DesktopAppHooks {
   audience: () => LiveAudience | null;
   /** Runs before logging out (which reloads the page), so a live broadcast ends cleanly. */
   beforeLogout: () => void;
-  /** The voice rooms' sidebar section and dock (views/voiceUi.ts); the app only places them. */
-  voiceRooms: Pick<VoiceUi, "roomsSection" | "dock">;
+  /** The voice rooms' sidebar section and dock (views/voiceUi.ts); the app places them and feeds them the lives. */
+  voiceRooms: Pick<VoiceUi, "roomsSection" | "dock" | "showLives">;
+  /** Which voice room the user sits in, and whether they are an admin. */
+  voiceSession: Pick<VoiceSession, "state" | "onChange">;
 }
 
 export interface DesktopApp {
-  voice(): VoiceState;
+  /** Where "Transmitir" would send a live right now. */
+  transmitPlace(): LivePlace | null;
   /** Re-renders the user panel after the live state changed. */
   refreshUserPanel(): void;
-  onVoiceChange(listener: (voice: VoiceState) => void): void;
+  /** Every change of where the user is (Discord channel or voice room). */
+  onWhereabouts(listener: (where: Whereabouts) => void): void;
   logOut(): void;
 }
 
@@ -59,11 +71,11 @@ function sameOriginWsUrl(path: string): string {
 }
 
 export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: StoredLogin, hooks: DesktopAppHooks): DesktopApp {
-  let state: AppState = { voice: { status: "unknown" }, broadcasts: [], selectedGuildId: null, watching: null };
+  let state: AppState = { voice: { status: "unknown" }, broadcasts: [], selectedGuildId: null, watching: null, place: null };
   let watchView: WatchView | null = null;
-  let watchedRoomId: string | null = null;
   let broadcastsTimer: ReturnType<typeof setInterval> | null = null;
-  const voiceListeners: Array<(voice: VoiceState) => void> = [];
+  const whereaboutsListeners: Array<(where: Whereabouts) => void> = [];
+  let lastWhereabouts = "";
 
   const rail = h("nav", { class: "desk-rail", "aria-label": "Servidores" });
   const sidebarHead = h("div", { class: "desk-sidebar-head" });
@@ -107,6 +119,17 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
     return state.voice.status === "in-channel" ? state.voice.location : null;
   }
 
+  function placeInput(): PlaceInput {
+    const voice = hooks.voiceSession.state();
+    const room = voice.roomId ? voice.rooms.find((candidate) => candidate.id === voice.roomId) : undefined;
+    return {
+      discord: state.voice,
+      voiceRoom: voice.roomId ? { id: voice.roomId, name: room?.name ?? UNLISTED_ROOM_NAME } : null,
+      voiceRoomUnsettled: !voice.connected || voice.rejoining,
+      isAdmin: voice.isAdmin,
+    };
+  }
+
   function render(): void {
     const servers = buildSidebarModel({ location: currentLocation(), broadcasts: state.broadcasts });
     const selectedGuildId = servers.some((server) => server.guildId === state.selectedGuildId)
@@ -123,6 +146,7 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
     renderUserPanel(userPanel, {
       user: login.user,
       voice: state.voice,
+      place: transmitPlace(placeInput()),
       isLive: hooks.isLive(),
       audience: hooks.audience(),
       onTransmit: () => hooks.onTransmit?.(),
@@ -134,18 +158,30 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
       : undefined;
     renderMainHeader(
       mainHead,
-      state.voice,
+      state.place,
       watched ? { name: watched.presenterName ?? "Alguém", onLeave: () => watchView?.stopWatching() } : null,
     );
     renderOverlay();
+    hooks.voiceRooms.showLives({
+      broadcasts: state.broadcasts,
+      watching: state.watching,
+      onPick: (broadcast) => void watchView?.openBroadcast(broadcast),
+    });
   }
 
   function renderOverlay(): void {
-    if (state.voice.status === "not-in-voice") {
+    const lobbyIdle = state.place?.kind === "lobby" && state.watching === null;
+    if (lobbyIdle) {
+      overlay.replaceChildren(
+        emptyState("Você não está em nenhuma call", "Como admin, você pode abrir qualquer live ativa pela barra lateral."),
+      );
+    } else if (state.place) {
+      overlay.replaceChildren();
+    } else if (state.voice.status === "not-in-voice") {
       overlay.replaceChildren(
         emptyState(
           "Você não está em um canal de voz",
-          "Entre em um canal de voz de um servidor onde o bot está para ver e transmitir lives.",
+          "Entre em uma sala de voz aqui ou em um canal de voz de um servidor onde o bot está para ver e transmitir lives.",
         ),
       );
     } else if (state.voice.status === "unknown") {
@@ -153,7 +189,7 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
     } else {
       overlay.replaceChildren();
     }
-    overlay.classList.toggle("is-visible", state.voice.status !== "in-channel");
+    overlay.classList.toggle("is-visible", lobbyIdle || state.place === null);
   }
 
   function pickBroadcast(channel: SidebarChannel, slot: number): void {
@@ -168,26 +204,36 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
     broadcastsTimer = null;
     watchView?.destroy();
     watchView = null;
-    watchedRoomId = null;
   }
 
-  function mountPlayerFor(voice: VoiceState): void {
-    const location = voice.status === "in-channel" ? voice.location : null;
-    if (location?.channelId === watchedRoomId) return;
+  /** Moves the player to where the user is now, and tells listeners if that changed. */
+  function followPlace(): void {
+    const input = placeInput();
+    const next = playerPlace(input, state.place);
+    if (next?.roomId !== state.place?.roomId) mountPlayer(next);
+    else if (next !== state.place) setState({ place: next }); // same room, maybe renamed
+    else render();
 
+    const where = whereabouts(input);
+    const key = JSON.stringify(where);
+    if (key === lastWhereabouts) return;
+    lastWhereabouts = key;
+    for (const listener of whereaboutsListeners) listener(where);
+  }
+
+  function mountPlayer(place: LivePlace | null): void {
     unmountPlayer();
-    if (!location) {
-      setState({ broadcasts: [], watching: null });
+    if (!place) {
+      setState({ broadcasts: [], watching: null, place: null });
       return;
     }
 
-    watchedRoomId = location.channelId;
     watchView = mountWatchView({
       root: playerHost,
       wsUrl: relayWsUrl(),
-      roomId: location.channelId,
+      roomId: place.roomId,
       userId: login.user.id,
-      guildId: location.guildId,
+      guildId: place.guildId,
       session: login.session,
       embedded: true,
       // Your own live never plays back to you here: it would cost you its download too.
@@ -200,27 +246,32 @@ export function startDesktopApp(root: HTMLElement, api: DesktopApi, login: Store
       onWatchingChange: (watching) => setState({ watching }),
     });
     broadcastsTimer = setInterval(() => watchView?.requestBroadcasts(), BROADCASTS_POLL_INTERVAL_MS);
-    setState({ watching: null, selectedGuildId: location.guildId });
+    setState({
+      watching: null,
+      broadcasts: [],
+      place,
+      selectedGuildId: place.kind === "discord" ? place.guildId : state.selectedGuildId,
+    });
   }
 
   const poller = createVoicePoller({
     fetchVoice: () => fetch("/api/desktop/voice", { headers: { Authorization: `Bearer ${login.session}` } }),
     intervalMs: VOICE_POLL_INTERVAL_MS,
     onChange: (voice) => {
-      setState({ voice });
-      mountPlayerFor(voice);
-      for (const listener of voiceListeners) listener(voice);
+      state = { ...state, voice };
+      followPlace();
     },
     onSessionInvalid: () => void logOut(),
   });
 
+  hooks.voiceSession.onChange(followPlace);
   render();
   poller.start();
 
   return {
-    voice: () => state.voice,
+    transmitPlace: () => transmitPlace(placeInput()),
     refreshUserPanel: render,
-    onVoiceChange: (listener) => voiceListeners.push(listener),
+    onWhereabouts: (listener) => whereaboutsListeners.push(listener),
     logOut: () => void logOut(),
   };
 }

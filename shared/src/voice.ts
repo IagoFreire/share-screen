@@ -27,7 +27,32 @@ export interface VoiceMember {
   avatarUrl: string | null;
   muted: boolean;
   deafened: boolean;
+  /** Broadcasting a live to this room right now (see voiceLiveRoomId). */
+  live?: boolean;
 }
+
+/**
+ * A voice room's lives go through the screen-share relay like a Discord channel's, in a
+ * relay room of its own. The prefix keeps those ids apart from Discord's (all digits),
+ * and tells the relay to admit only the people seated in that voice room.
+ */
+export const VOICE_LIVE_ROOM_PREFIX = "voice:";
+
+export function voiceLiveRoomId(voiceRoomId: string): string {
+  return `${VOICE_LIVE_ROOM_PREFIX}${voiceRoomId}`;
+}
+
+/** The voice room a relay room carries the lives of, or null for any other relay room. */
+export function voiceRoomIdOfLive(relayRoomId: string): string | null {
+  return relayRoomId.startsWith(VOICE_LIVE_ROOM_PREFIX) ? relayRoomId.slice(VOICE_LIVE_ROOM_PREFIX.length) || null : null;
+}
+
+/**
+ * Where an admin's player waits while they are in no call: a relay room only admins may
+ * join and nobody may broadcast in. It is there so the admin can ask for every live and
+ * hop straight into any of them.
+ */
+export const ADMIN_LOBBY_ROOM_ID = "lobby:admins";
 
 export interface VoiceRoomInfo {
   id: string;

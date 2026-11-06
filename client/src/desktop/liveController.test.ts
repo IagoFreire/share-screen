@@ -1,16 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { buildQualityPreset, type VoiceLocation } from "@screenshare-bot/shared";
+import { buildQualityPreset } from "@screenshare-bot/shared";
 import { createLiveController, type BroadcastHandle, type LiveControllerDeps } from "./liveController.js";
-import type { VoiceState } from "./voicePoller.js";
+import type { Whereabouts } from "./livePlace.js";
 
 const QUALITY = buildQualityPreset("1080p", 60, "balanced");
 const TARGET = { roomId: "c1", guildId: "g1" };
 
-function location(channelId: string): VoiceLocation {
-  return { guildId: "g1", guildName: "Servidor", guildIconUrl: null, channelId, channelName: "Jogando" };
-}
-
-const inChannel = (channelId: string): VoiceState => ({ status: "in-channel", location: location(channelId) });
+const inChannel = (...roomIds: string[]): Whereabouts => ({ known: true, roomIds });
+const NOWHERE: Whereabouts = { known: true, roomIds: [] };
+const UNKNOWN: Whereabouts = { known: false, roomIds: [] };
 
 function setup(answers: boolean[] = []) {
   const calls: string[] = [];
@@ -109,8 +107,8 @@ describe("live controller", () => {
     const { controller, calls, confirms } = setup([false]);
     await controller.goLive("screen:0:0", QUALITY, TARGET);
 
-    await controller.onVoiceState({ status: "not-in-voice" });
-    await controller.onVoiceState({ status: "not-in-voice" });
+    await controller.onWhereabouts(NOWHERE);
+    await controller.onWhereabouts(NOWHERE);
 
     expect(confirms()).toBe(1);
     expect(controller.isLive).toBe(true);
@@ -121,7 +119,7 @@ describe("live controller", () => {
     const { controller, calls } = setup([true]);
     await controller.goLive("screen:0:0", QUALITY, TARGET);
 
-    await controller.onVoiceState(inChannel("another-channel"));
+    await controller.onWhereabouts(inChannel("another-channel"));
 
     expect(controller.isLive).toBe(false);
     expect(calls.at(-1)).toBe("stop");
@@ -131,9 +129,9 @@ describe("live controller", () => {
     const { controller, confirms } = setup([false, false]);
     await controller.goLive("screen:0:0", QUALITY, TARGET);
 
-    await controller.onVoiceState({ status: "not-in-voice" });
-    await controller.onVoiceState(inChannel("c1"));
-    await controller.onVoiceState({ status: "not-in-voice" });
+    await controller.onWhereabouts(NOWHERE);
+    await controller.onWhereabouts(inChannel("c1"));
+    await controller.onWhereabouts(NOWHERE);
 
     expect(confirms()).toBe(2);
   });
@@ -141,9 +139,28 @@ describe("live controller", () => {
   it("voice changes while not live never ask", async () => {
     const { controller, confirms } = setup();
 
-    await controller.onVoiceState({ status: "not-in-voice" });
-    await controller.onVoiceState(inChannel("c2"));
+    await controller.onWhereabouts(NOWHERE);
+    await controller.onWhereabouts(inChannel("c2"));
 
     expect(confirms()).toBe(0);
+  });
+
+  it("stays quiet while where you are is still unknown", async () => {
+    const { controller, confirms } = setup();
+    await controller.goLive("screen:0:0", QUALITY, TARGET);
+
+    await controller.onWhereabouts(UNKNOWN);
+
+    expect(confirms()).toBe(0);
+  });
+
+  it("a live in a voice room stays put while you are also in a Discord channel", async () => {
+    const { controller, confirms } = setup();
+    await controller.goLive("screen:0:0", QUALITY, { roomId: "voice:r1", guildId: null });
+
+    await controller.onWhereabouts(inChannel("voice:r1", "c1"));
+    await controller.onWhereabouts(inChannel("c1"));
+
+    expect(confirms()).toBe(1); // only leaving the voice room asks
   });
 });

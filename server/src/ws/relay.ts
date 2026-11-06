@@ -9,6 +9,7 @@ import {
   SLOT_PRESENTER,
   type ControlMessage,
   type LayerInfo,
+  voiceRoomIdOfLive,
 } from "@screenshare-bot/shared";
 import { roomManager } from "../roomManager.js";
 import { config } from "../config.js";
@@ -22,6 +23,8 @@ import { presenterAudience, videoLayersInUse } from "./audience.js";
 import { createKeyframeThrottle } from "./keyframeThrottle.js";
 import { sanitizeAudioStatus } from "./audioStatus.js";
 import { countSpectators, listRoomPeople } from "./viewerList.js";
+import { canPresentIn, specialRoomAccess } from "./roomAccess.js";
+import { voiceRoomLives } from "../voice/voiceServer.js";
 
 /** The frame header carries the layer in 2 bits. */
 const MAX_LAYERS = 4;
@@ -120,7 +123,7 @@ async function sendActiveBroadcasts(ws: WebSocket, onlyRoomId: string | null): P
     entries.map(async ({ room, stream }) => {
       const [guildName, channelName, presenterName] = await Promise.all([
         resolveGuildName(room.guildId),
-        resolveChannelName(room.id),
+        roomName(room.id),
         resolveUserName(stream.presenterId),
       ]);
       return {
@@ -137,6 +140,12 @@ async function sendActiveBroadcasts(ws: WebSocket, onlyRoomId: string | null): P
   );
 
   send(ws, { kind: "active-broadcasts", broadcasts });
+}
+
+/** A desktop voice room is named by the app, not Discord -- and its id means nothing to Discord. */
+async function roomName(roomId: string): Promise<string | null> {
+  const voiceRoomId = voiceRoomIdOfLive(roomId);
+  return voiceRoomId === null ? resolveChannelName(roomId) : voiceRoomLives.roomName(voiceRoomId);
 }
 
 /** Sends who is in `room` (the viewer list), names looked up like the broadcast list's. */
@@ -167,6 +176,8 @@ function broadcastControl(room: Room, message: ControlMessage): void {
 /** Tells everyone the set of live broadcasts changed, so viewers can update their picker. */
 function broadcastStreams(room: Room): void {
   broadcastControl(room, { kind: "streams-changed", streams: room.streams });
+  // A voice room's member list shows who in it is live.
+  if (voiceRoomIdOfLive(room.id) !== null) voiceRoomLives.livesChanged();
   // Someone going live or stopping moves them out of or back into the audience.
   announceViewerCount(room);
 }
@@ -414,6 +425,18 @@ async function handleJoin(
   }
   const userId = identity.userId;
 
+  // Voice rooms and the admins' lobby, checked before the room is made: a refused join
+  // must not leave an empty room behind.
+  const access = specialRoomAccess(
+    message.roomId,
+    { userId, verified: identity.verified, isAdmin: isAdmin(userId) },
+    voiceRoomLives.isSeated,
+  );
+  if (access && !access.ok) {
+    send(ws, { kind: "error", message: access.message });
+    return;
+  }
+
   const room = roomManager.getOrCreateRoom(message.roomId);
   if (!room || !room.canAddViewer()) {
     send(ws, { kind: "room-full" });
@@ -423,7 +446,7 @@ async function handleJoin(
   // Admins skip the membership check on purpose: monitoring rooms across servers means
   // opening broadcasts in channels they are not connected to, which is the whole point
   // of the active-broadcast list.
-  if (message.guildId && userId && !isAdmin(userId)) {
+  if (!access && message.guildId && userId && !isAdmin(userId)) {
     const allowed = await isUserInVoiceChannel(message.guildId, message.roomId, userId);
     if (!allowed) {
       send(ws, { kind: "error", message: "You must be in this voice channel to join." });
@@ -505,6 +528,10 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       if (!state.roomId) return;
       const room = roomManager.getRoom(state.roomId);
       if (!room) return;
+      if (!canPresentIn(room.id)) {
+        send(ws, { kind: "error", message: "Não dá para transmitir aqui." });
+        return;
+      }
 
       const presenterId = state.isVerified ? state.userId : message.presenterId;
       const slot = room.allocateSlot(ws, presenterId, message.audio, validLayers(message.layers));

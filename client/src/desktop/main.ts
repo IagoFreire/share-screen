@@ -60,8 +60,8 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
     setLive: (isLive) => api.setLive(isLive),
     confirmLeave: () =>
       confirmDialog({
-        title: "Você saiu do canal de voz",
-        text: "Sua transmissão continua no ar para quem está no canal. Quer encerrar agora?",
+        title: "Você saiu de onde está transmitindo",
+        text: "Sua transmissão continua no ar para quem está lá. Quer encerrar agora?",
         confirmLabel: "Encerrar transmissão",
         cancelLabel: "Continuar transmitindo",
       }),
@@ -81,12 +81,12 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
         live.end();
         return;
       }
-      const voice = app?.voice();
-      if (voice?.status !== "in-channel") return;
-      const { channelId, guildId, channelName } = voice.location;
+      const place = app?.transmitPlace();
+      if (!place) return;
       openTransmitModal(api, {
-        channelName: channelName ?? "canal de voz",
-        onGoLive: (sourceId, quality, audio) => live.goLive(sourceId, quality, { roomId: channelId, guildId }, audio),
+        channelName: place.name,
+        onGoLive: (sourceId, quality, audio) =>
+          live.goLive(sourceId, quality, { roomId: place.roomId, guildId: place.guildId }, audio),
       });
     },
     isLive: () => live.isLive,
@@ -97,13 +97,14 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
       voteMemory.forget(login.user.id); // the next login answers the poll again
     },
     voiceRooms: createVoiceUi(voiceRooms),
+    voiceSession: voiceRooms,
   });
 
   live.onChange(() => {
     if (!live.isLive) audience = null;
     app?.refreshUserPanel();
   });
-  app.onVoiceChange((voice) => void live.onVoiceState(voice));
+  app.onWhereabouts((where) => void live.onWhereabouts(where));
   api.onEndLiveRequested(() => live.end());
 }
 

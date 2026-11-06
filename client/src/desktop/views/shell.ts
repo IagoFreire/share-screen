@@ -3,6 +3,7 @@ import type { LiveAudience } from "../broadcast.js";
 // Fingerprinted by Vite, like desktop/main.ts's sound, so a changed image is never served stale.
 import janjaUrl from "../../../assets/janja.png";
 import { avatar, h, icon, initials } from "../dom.js";
+import type { LivePlace } from "../livePlace.js";
 import type { SidebarChannel, SidebarServer } from "../sidebarModel.js";
 import type { VoiceState } from "../voicePoller.js";
 
@@ -130,6 +131,8 @@ export function renderChannels(head: HTMLElement, list: HTMLElement, server: Sid
 export interface UserPanelOptions {
   user: DesktopUser;
   voice: VoiceState;
+  /** Where "Transmitir" sends a live: the voice room you sit in, else your Discord channel. */
+  place: LivePlace | null;
   isLive: boolean;
   /** Who receives your live; null until the relay says. */
   audience: LiveAudience | null;
@@ -151,7 +154,7 @@ function liveLabel(audience: LiveAudience): string {
 
 export function renderUserPanel(container: HTMLElement, options: UserPanelOptions): void {
   const name = options.user.globalName ?? options.user.username;
-  const inVoice = options.voice.status === "in-channel";
+  const inVoice = options.place !== null;
   const transmitLabel = options.isLive ? "Encerrar transmissão" : "Transmitir";
   const audience = options.isLive ? options.audience : null;
   const isPausedLive = audience !== null && audience.watchers === 0 && audience.videoWatchers === 0;
@@ -176,7 +179,7 @@ export function renderUserPanel(container: HTMLElement, options: UserPanelOption
             class: "desk-user-status",
             title: isPausedLive ? "Sua live não gasta sua internet enquanto ninguém assiste. Volta sozinha quando alguém abrir." : undefined,
           },
-          audience !== null ? liveLabel(audience) : voiceLabel(options.voice),
+          audience !== null ? liveLabel(audience) : options.place ? `Em 🔊 ${options.place.name}` : voiceLabel(options.voice),
         ),
       ),
       h(
@@ -191,7 +194,7 @@ export function renderUserPanel(container: HTMLElement, options: UserPanelOption
         class: `desk-transmit${options.isLive ? " is-live" : ""}`,
         type: "button",
         disabled: !inVoice && !options.isLive,
-        title: inVoice || options.isLive ? transmitLabel : "Entre em um canal de voz para transmitir",
+        title: inVoice || options.isLive ? transmitLabel : "Entre em uma sala ou canal de voz para transmitir",
         onClick: options.onTransmit,
       },
       icon(ICONS.screen),
@@ -216,18 +219,19 @@ export interface MainHeaderWatching {
   onLeave(): void;
 }
 
+/** `place` is where the player is connected (the admins' lobby included); null shows the app's name. */
 export function renderMainHeader(
   container: HTMLElement,
-  voice: VoiceState,
+  place: LivePlace | null,
   watching: MainHeaderWatching | null,
 ): void {
-  if (voice.status !== "in-channel") {
+  if (!place) {
     container.replaceChildren(h("span", { class: "desk-main-title" }, APP_NAME));
     return;
   }
   const title = [
-    icon(ICONS.speaker, "desk-main-icon"),
-    h("span", { class: "desk-main-title" }, voice.location.channelName ?? "Canal de voz"),
+    icon(place.kind === "lobby" ? ICONS.screen : ICONS.speaker, "desk-main-icon"),
+    h("span", { class: "desk-main-title" }, place.name),
   ];
   const watchingParts = watching
     ? [

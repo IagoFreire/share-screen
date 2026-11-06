@@ -1,11 +1,12 @@
-import type { ActiveBroadcast, VoiceLocation } from "@screenshare-bot/shared";
+import { voiceRoomIdOfLive, type ActiveBroadcast, type VoiceLocation } from "@screenshare-bot/shared";
 
 /**
  * What the desktop sidebar shows: servers, and under each the voice channels worth
  * listing -- yours (always, so you can broadcast there even when nobody is live) and any
  * other channel with someone live in it. Which broadcasts reach this list is the relay's
  * decision (an admin's spans every room, anyone else's only their own channel), so this
- * only groups and orders what it is given.
+ * only groups and orders what it is given -- minus the desktop voice rooms' lives, which
+ * show under their own room (views/voiceUi.ts).
  */
 
 export interface SidebarPresenter {
@@ -79,7 +80,7 @@ export function buildSidebarModel(input: {
     channelFor(location.channelId, location.guildId, location.channelName, serverFor(location.guildId, location.guildName));
   }
 
-  for (const broadcast of input.broadcasts) {
+  for (const broadcast of input.broadcasts.filter((candidate) => voiceRoomIdOfLive(candidate.roomId) === null)) {
     const server = serverFor(broadcast.guildId, broadcast.guildName);
     const channel = channelFor(broadcast.roomId, broadcast.guildId, broadcast.channelName, server);
     channel.presenters.push({

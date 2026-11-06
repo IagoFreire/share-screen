@@ -1,6 +1,6 @@
 import "./voice.css";
 import "./voicePanel.css";
-import type { VoiceMember, VoiceRoomInfo } from "@screenshare-bot/shared";
+import { voiceLiveRoomId, type ActiveBroadcast, type VoiceMember, type VoiceRoomInfo } from "@screenshare-bot/shared";
 import { avatar, h, icon } from "../dom.js";
 import { listAudioDevices, type AudioDevice, type DeviceKind } from "../../voice/voiceDevices.js";
 import { SPEAKING_LEVEL } from "../../voice/voiceLevel.js";
@@ -37,11 +37,21 @@ function fill(target: HTMLElement, ...children: Array<Node | null>): void {
   target.replaceChildren(...children.filter((child): child is Node => child !== null));
 }
 
+/** The lives the app's player can open right now, for the "AO VIVO" badges on members. */
+export interface VoiceLives {
+  /** The relay's list: the player's room only, or every room for an admin. */
+  broadcasts: ActiveBroadcast[];
+  watching: { roomId: string; slot: number } | null;
+  onPick(broadcast: ActiveBroadcast): void;
+}
+
 export interface VoiceUi {
   /** The sidebar section; the host re-appends it after redrawing the channel list. */
   readonly roomsSection: HTMLElement;
   /** Sits right above the user panel. */
   readonly dock: HTMLElement;
+  /** Who in each room can be watched; redraws the rooms only when that changed. */
+  showLives(lives: VoiceLives): void;
   destroy(): void;
 }
 
@@ -56,6 +66,9 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
   let closeUserMenu: (() => void) | null = null;
   /** The open device panel's box; see redrawPanel. */
   let panelBox: HTMLElement | null = null;
+  let lives: VoiceLives = { broadcasts: [], watching: null, onPick: () => {} };
+  /** What the badges were drawn from; see showLives. */
+  let shownLives = "";
 
   // The name field and the device panel outlive the redraws around them: someone joining
   // a room elsewhere must not steal the focus or close a device list mid-pick.
@@ -129,6 +142,36 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
     renderRooms();
   }
 
+  /**
+   * "AO VIVO" by someone broadcasting to the room. It opens the live when the player can
+   * reach it -- your own room, or any room for an admin -- and only says so otherwise.
+   */
+  function liveBadge(member: VoiceMember, room: VoiceRoomInfo): HTMLElement {
+    const roomId = voiceLiveRoomId(room.id);
+    const broadcast = lives.broadcasts.find((candidate) => candidate.roomId === roomId && candidate.presenterId === member.userId);
+    if (!broadcast) return h("span", { class: "desk-live vc-live-badge", title: "Ao vivo: entre na sala para assistir" }, "AO VIVO");
+    const isWatching = lives.watching?.roomId === roomId && lives.watching.slot === broadcast.slot;
+    const isSelf = member.userId === session.state().userId;
+    const label = isSelf ? "Ver sua live (enquanto estiver aberta, ela usa sua internet)" : `Assistir ${member.name}`;
+    return h(
+      "button",
+      {
+        class: `desk-live vc-live-badge is-pickable${isWatching ? " is-watching" : ""}`,
+        type: "button",
+        title: label,
+        "aria-label": label,
+        "aria-pressed": isWatching ? "true" : "false",
+        onClick: () => lives.onPick(broadcast),
+      },
+      "AO VIVO",
+    );
+  }
+
+  function memberLine(member: VoiceMember, room: VoiceRoomInfo, here: boolean): HTMLElement {
+    const row = memberRow(member, here);
+    return member.live ? h("div", { class: "vc-member-line" }, row, liveBadge(member, room)) : row;
+  }
+
   function memberRow(member: VoiceMember, here: boolean): HTMLElement {
     const content = [
       avatar(member.name, member.avatarUrl, member.userId, "vc-avatar"),
@@ -195,7 +238,7 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
       ),
       session.state().isAdmin ? deleteButton(room) : null,
       room.members.length > 0
-        ? h("div", { class: "vc-members" }, ...room.members.map((member) => memberRow(member, here)))
+        ? h("div", { class: "vc-members" }, ...room.members.map((member) => memberLine(member, room, here)))
         : null,
     );
   }
@@ -382,6 +425,13 @@ export function createVoiceUi(session: VoiceSession): VoiceUi {
   return {
     roomsSection,
     dock,
+    showLives(next) {
+      lives = next;
+      const key = JSON.stringify([next.watching, next.broadcasts.map((b) => [b.roomId, b.slot, b.presenterId])]);
+      if (key === shownLives) return;
+      shownLives = key;
+      renderRooms();
+    },
     destroy() {
       cancelAnimationFrame(frame);
       closeUserMenu?.();

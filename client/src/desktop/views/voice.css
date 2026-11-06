@@ -445,3 +445,44 @@ button.vc-member:hover {
     animation: none;
   }
 }
+
+/* A member broadcasting to the room: their row, then "AO VIVO" (voiceUi.ts liveBadge). */
+.vc-member-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+}
+
+.vc-member-line > .vc-member {
+  flex: 1;
+  min-width: 0;
+}
+
+.vc-live-badge {
+  flex: none;
+  border: 0;
+  font: inherit;
+}
+
+.vc-live-badge.is-pickable {
+  cursor: pointer;
+  transition: filter 120ms ease, transform 120ms ease;
+}
+
+.vc-live-badge.is-pickable:hover {
+  filter: brightness(1.15);
+}
+
+.vc-live-badge.is-pickable:active {
+  transform: scale(0.95);
+}
+
+.vc-live-badge.is-pickable:focus-visible {
+  outline: 2px solid var(--desk-text);
+  outline-offset: 2px;
+}
+
+.vc-live-badge.is-watching {
+  box-shadow: 0 0 0 2px var(--desk-text);
+}

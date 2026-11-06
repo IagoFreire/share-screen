@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { VOICE_MAX_MEMBERS, VOICE_MAX_ROOMS } from "@screenshare-bot/shared";
-import { VoiceRooms } from "./voiceRooms.js";
+import { VoiceRooms, withLives } from "./voiceRooms.js";
 
 const profile = (userId: string) => ({ userId, name: `user ${userId}`, avatarUrl: null });
 
@@ -171,5 +171,45 @@ describe("VoiceRooms", () => {
 
     expect(rooms.remove("nope")).toBeNull();
     expect(rooms.list()).toHaveLength(1);
+  });
+});
+
+describe("voice room lives", () => {
+  it("knows who is seated in a room, which is who may watch its lives", () => {
+    const rooms = openRooms();
+    const created = rooms.create("Resenha", "conn-a", profile("a"));
+    if (!created.ok) throw new Error("room not created");
+    rooms.create("Outra", "conn-b", profile("b"));
+
+    expect(rooms.hasMember(created.roomId, "a")).toBe(true);
+    expect(rooms.hasMember(created.roomId, "b")).toBe(false);
+    expect(rooms.hasMember("gone", "a")).toBe(false);
+    expect(rooms.nameOf(created.roomId)).toBe("Resenha");
+    expect(rooms.nameOf("gone")).toBeNull();
+  });
+
+  it("nobody is seated anywhere once voice rooms are turned off", () => {
+    const rooms = openRooms();
+    const created = rooms.create("Resenha", "conn-a", profile("a"));
+    if (!created.ok) throw new Error("room not created");
+
+    rooms.setEnabled(false);
+
+    expect(rooms.hasMember(created.roomId, "a")).toBe(false);
+  });
+
+  it("withLives marks only the members broadcasting to their own room", () => {
+    const rooms = openRooms();
+    const created = rooms.create("Resenha", "conn-a", profile("a"));
+    if (!created.ok) throw new Error("room not created");
+    rooms.join(created.roomId, "conn-b", profile("b"));
+
+    const listed = withLives(rooms.list(), (roomId) => new Set(roomId === created.roomId ? ["b"] : []));
+
+    expect(listed[0].members.map((member) => [member.userId, member.live])).toEqual([
+      ["a", false],
+      ["b", true],
+    ]);
+    expect(rooms.list()[0].members[1].live).toBeUndefined(); // the registry itself is untouched
   });
 });

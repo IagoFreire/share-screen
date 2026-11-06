@@ -8,11 +8,14 @@ import {
   VOICE_MAX_PACKET_BYTES,
   type EncodedFrame,
   type VoiceServerMessage,
+  voiceLiveRoomId,
+  type VoiceRoomInfo,
 } from "@screenshare-bot/shared";
 import { config } from "../config.js";
 import { verifySessionToken } from "../auth/session.js";
 import { clearBackpressureState, sendOrDrop } from "../ws/backpressure.js";
-import { VoiceRooms, type MemberProfile } from "./voiceRooms.js";
+import { roomManager } from "../roomManager.js";
+import { VoiceRooms, withLives, type MemberProfile } from "./voiceRooms.js";
 
 /**
  * The /voice WebSocket (see shared/src/voice.ts): signs a desktop session in, keeps the
@@ -32,8 +35,19 @@ function send(ws: WebSocket, message: VoiceServerMessage): void {
   if (ws.readyState === ws.OPEN) ws.send(encodeVoiceControl(message));
 }
 
+/** Who broadcasts to a voice room's relay room (see voiceLiveRoomId). */
+function liveUsersIn(voiceRoomId: string): Set<string> {
+  const streams = roomManager.getRoom(voiceLiveRoomId(voiceRoomId))?.streams ?? [];
+  return new Set(streams.flatMap((stream) => (stream.presenterId ? [stream.presenterId] : [])));
+}
+
+/** The room list as everyone sees it: each member marked live or not. */
+function listRooms(): VoiceRoomInfo[] {
+  return withLives(rooms.list(), liveUsersIn);
+}
+
 function broadcastRooms(): void {
-  const message = encodeVoiceControl({ kind: "rooms", rooms: rooms.list(), enabled: rooms.enabled });
+  const message = encodeVoiceControl({ kind: "rooms", rooms: listRooms(), enabled: rooms.enabled });
   for (const ws of profiles.keys()) if (ws.readyState === ws.OPEN) ws.send(message);
 }
 
@@ -75,7 +89,7 @@ function signIn(ws: WebSocket, message: Record<string, unknown>): void {
     typeof message.avatarUrl === "string" && message.avatarUrl.startsWith(AVATAR_PREFIX) ? message.avatarUrl : null;
   profiles.set(ws, { userId, name: name || "Alguém", avatarUrl });
   send(ws, { kind: "welcome", userId, isAdmin: isAdmin(userId) });
-  send(ws, { kind: "rooms", rooms: rooms.list(), enabled: rooms.enabled });
+  send(ws, { kind: "rooms", rooms: listRooms(), enabled: rooms.enabled });
 }
 
 function handleControl(ws: WebSocket, raw: unknown): void {
@@ -143,6 +157,17 @@ function forwardAudio(ws: WebSocket, frame: EncodedFrame): void {
   const outgoing = encodeFrame({ ...frame, slot: seat.slot, type: FrameType.Audio }, frame.payload);
   for (const listener of rooms.listenersOf(ws)) sendOrDrop(listener, outgoing, "audio");
 }
+
+/**
+ * What the screen-share relay needs from the voice rooms: who may watch a room's lives,
+ * what to call the room in the live list, and a nudge when someone in a room goes live
+ * or stops, so every member list shows it.
+ */
+export const voiceRoomLives = {
+  isSeated: (voiceRoomId: string, userId: string): boolean => rooms.hasMember(voiceRoomId, userId),
+  roomName: (voiceRoomId: string): string | null => rooms.nameOf(voiceRoomId),
+  livesChanged: (): void => broadcastRooms(),
+};
 
 export function handleVoiceMessage(ws: WebSocket, data: Uint8Array): void {
   const frame = decodeVoiceFrame(data);

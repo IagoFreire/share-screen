@@ -46,6 +46,8 @@ export interface VoiceState {
   rooms: VoiceRoomInfo[];
   /** The room this app is in, and its seat there. */
   roomId: string | null;
+  /** Getting back into the room after the socket dropped: `roomId` is null only for now. */
+  rejoining: boolean;
   slot: number | null;
   muted: boolean;
   deafened: boolean;
@@ -114,6 +116,7 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
     enabled: false,
     rooms: [],
     roomId: null,
+    rejoining: false,
     slot: null,
     muted: false,
     deafened: false,
@@ -276,11 +279,12 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
           const target = rejoinRoomId;
           rejoinRoomId = null;
           if (message.rooms.some((room) => room.id === target)) send({ kind: "join-room", roomId: target });
+          else update({ rejoining: false }); // the room closed while this was away
         }
         return;
       }
       case "in-room":
-        update({ roomId: message.roomId, slot: message.slot });
+        update({ roomId: message.roomId, slot: message.slot, rejoining: false });
         if (message.roomId) {
           enterRoom();
           sendState();
@@ -294,7 +298,7 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
           options.onSessionInvalid();
           return;
         }
-        update({ error: message.message });
+        update({ error: message.message, rejoining: false });
         return;
       default:
         return;
@@ -324,7 +328,7 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
       // The server forgot this connection's seat; get back in once reconnected.
       rejoinRoomId = state.roomId;
       exitRoom();
-      update({ connected: false, roomId: null, slot: null });
+      update({ connected: false, roomId: null, slot: null, rejoining: rejoinRoomId !== null });
       if (!closed) setTimeout(connect, RECONNECT_DELAY_MS);
     });
     ws.addEventListener("error", () => ws.close());
