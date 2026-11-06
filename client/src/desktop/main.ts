@@ -8,6 +8,7 @@ import type { DesktopApi, StoredLogin } from "@screenshare-bot/shared";
 import { startDesktopBroadcast, type LiveAudience } from "./broadcast.js";
 import { h } from "./dom.js";
 import { relayWsUrl, startDesktopApp, voiceWsUrl, type DesktopApp } from "./desktopApp.js";
+import { createJoinChime, playJoinChime } from "./joinChime.js";
 import { createLiveController } from "./liveController.js";
 import { renderLoginScreen } from "./views/loginScreen.js";
 import { titleBar } from "./views/shell.js";
@@ -33,6 +34,8 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
   let alertAudio: HTMLAudioElement | null = null;
   // Assigned right below; the hooks only run after the app has started.
   let app: DesktopApp | null = null;
+  /** "Someone opened your live" (joinChime.ts). */
+  const joinChime = createJoinChime({ now: () => Date.now(), play: playJoinChime });
 
   function playKnock(): void {
     alertAudio ??= new Audio(doorKnockUrl);
@@ -51,6 +54,7 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
         appAudio: api.appAudio,
         selectSource: (id, options) => api.selectSource(id, options),
         onAudience: (next) => {
+          joinChime.onAudience(next);
           audience = next;
           app?.refreshUserPanel();
         },
@@ -101,7 +105,10 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
   });
 
   live.onChange(() => {
-    if (!live.isLive) audience = null;
+    if (!live.isLive) {
+      audience = null;
+      joinChime.reset();
+    }
     app?.refreshUserPanel();
   });
   app.onWhereabouts((where) => void live.onWhereabouts(where));
