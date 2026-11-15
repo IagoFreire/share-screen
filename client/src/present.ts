@@ -19,6 +19,7 @@ import { startVideoEncodePipeline } from "./capture/videoEncodePipeline.js";
 import { startAudioEncodePipeline } from "./capture/audioEncodePipeline.js";
 import { measureAudioRebaseUs } from "./capture/clockOffset.js";
 import { createPresenterSession } from "./session/presenterSession.js";
+import { canTryLinkSilently, janjaTransmitLink } from "./ui/janjaLink.js";
 
 /**
  * Entry point for present.html -- a plain page opened in a normal browser tab
@@ -31,6 +32,8 @@ import { createPresenterSession } from "./session/presenterSession.js";
 const ICON_SCREEN = `<svg viewBox="0 0 24 24" width="40" height="40" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg>`;
 
 const QUALITY_STORAGE_KEY = "screenshare-bot:quality";
+/** How long after firing the janja:// link a lost focus still means Janja opened. */
+const JANJA_OPEN_WAIT_MS = 5000;
 
 function getRoomId(): string | null {
   return new URLSearchParams(window.location.search).get("room");
@@ -99,6 +102,7 @@ function main(): void {
 
       <p class="quality-hint" id="quality-hint"></p>
       <p class="audio-notice" id="audio-notice"></p>
+      <p class="quality-hint">Tem a Janja instalada? <a id="open-janja" href="#">Transmitir pela Janja</a></p>
       <button id="share-btn" class="btn-primary btn-lg" type="button">Compartilhar tela</button>
     </div>
   `;
@@ -108,6 +112,23 @@ function main(): void {
   const bitrateSelect = root.querySelector<HTMLSelectElement>("#bitrate-select")!;
   const qualityHint = root.querySelector<HTMLParagraphElement>("#quality-hint")!;
   const audioNotice = root.querySelector<HTMLParagraphElement>("#audio-notice")!;
+
+  // The Activity only opens this tab when no Janja was open; it may still be installed,
+  // closed. Its janja:// link starts it on this room's transmit dialog (janjaLink.ts).
+  const janjaLink = janjaTransmitLink(roomId, getGuildId());
+  const openJanja = root.querySelector<HTMLAnchorElement>("#open-janja")!;
+  openJanja.href = janjaLink;
+  /** The browser hands the link to Janja and this tab loses focus: say where to go on. */
+  function noteJanjaOpening(): void {
+    const onBlur = () => setStatus("Abrimos a Janja: escolha a tela lá. Esta aba pode ser fechada.");
+    window.addEventListener("blur", onBlur, { once: true });
+    setTimeout(() => window.removeEventListener("blur", onBlur), JANJA_OPEN_WAIT_MS);
+  }
+  openJanja.addEventListener("click", noteJanjaOpening);
+  if (canTryLinkSilently(navigator)) {
+    noteJanjaOpening();
+    window.location.href = janjaLink;
+  }
 
   /** Lazily created on the first alert; see playAlertChime. */
   let alertAudio: HTMLAudioElement | null = null;

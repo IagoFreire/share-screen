@@ -26,6 +26,7 @@ import { createSourceSelection, isSourceId, pickDisplayMedia, THUMBNAIL_SIZE, to
 import { isAllowedNavigation } from "./navigation";
 import { pickServerOrigin, serverOriginCandidates } from "./serverOrigin";
 import { createUpdateTracker } from "./updates";
+import { DEEP_LINK_SCHEME, findTransmitLink, type TransmitLink } from "./deepLink";
 import { mainWindowWebPreferences } from "./windowOptions";
 
 /**
@@ -224,6 +225,21 @@ function showMainWindow(): void {
   mainWindow.focus();
 }
 
+/**
+ * A janja:// transmit link (deepLink.ts), kept until the page takes it: at a cold start
+ * the page is still loading, or still on the login screen, when the link arrives.
+ */
+let pendingTransmit: TransmitLink | null = null;
+
+/** Relaunched by a janja:// link while running: hand it to the page and come forward. */
+function followTransmitLink(argv: readonly string[]): void {
+  const link = findTransmitLink(argv);
+  if (!link) return;
+  pendingTransmit = link;
+  showMainWindow();
+  mainWindow?.webContents.send("desktop:open-transmit");
+}
+
 /** Quitting while live first asks the page to end the broadcast, so viewers see it stop. */
 function quitApp(): void {
   endLiveThen(() => app.quit());
@@ -333,6 +349,13 @@ function registerIpc(): void {
     if (isTrustedSender(event)) showMainWindow();
   });
 
+  ipcMain.handle("desktop:take-open-transmit", (event) => {
+    assertTrustedSender(event);
+    const link = pendingTransmit;
+    pendingTransmit = null;
+    return link;
+  });
+
   ipcMain.on("desktop:window", (event, action: unknown) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     if (!window || !isTrustedSender(event)) return;
@@ -439,7 +462,14 @@ if (!app.commandLine.hasSwitch("user-data-dir")) {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", showMainWindow);
+  app.on("second-instance", (_event, argv) => {
+    showMainWindow();
+    followTransmitLink(argv);
+  });
+
+  // janja:// links (deepLink.ts) launch this app. Only an installed copy claims them: a
+  // dev run registering itself would steal the links from the real install.
+  if (app.isPackaged) app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME);
   app.on("before-quit", () => {
     isQuitting = true;
     stopAppAudio();
@@ -466,6 +496,8 @@ if (!app.requestSingleInstanceLock()) {
       autoUpdater.checkForUpdatesAndNotify().catch((error: unknown) => console.error("Update check failed:", error));
     }
     mainWindow = createMainWindow();
+    // Started by a janja:// link: the page takes it once it is ready (see pendingTransmit).
+    pendingTransmit = findTransmitLink(process.argv);
   });
 
   app.on("window-all-closed", () => app.quit());

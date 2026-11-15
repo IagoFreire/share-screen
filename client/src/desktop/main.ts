@@ -100,6 +100,8 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
     onSessionInvalid: () => app?.logOut(),
     onOpenTransmit: openTransmitFromActivity,
   });
+  // The same request when Janja was closed: the browser tab fired a janja:// link.
+  api.onOpenTransmitRequested?.(openTransmitFromActivity);
 
   app = startDesktopApp(content, api, login, {
     onTransmit: () => {

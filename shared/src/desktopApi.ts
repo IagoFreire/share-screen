@@ -84,6 +84,12 @@ export interface DesktopApi {
   notify(title: string, body: string): void;
   /** Brings the window up from the tray or behind other windows. Missing before 0.9.0. */
   focusWindow?(): void;
+  /**
+   * A janja:// link (the Activity's "Compartilhar tela", via present.html) asked to go
+   * live in this relay room -- including the one that launched the app. Returns the
+   * unsubscribe. Missing before 0.9.0.
+   */
+  onOpenTransmitRequested?(listener: (target: { roomId: string; guildId: string | null }) => void): () => void;
   /** The tray's "Encerrar transmissão" was clicked. */
   onEndLiveRequested(listener: () => void): void;
   appAudio: DesktopAppAudio;

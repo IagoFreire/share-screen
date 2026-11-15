@@ -33,6 +33,20 @@ const api: DesktopApi = {
   setLive: (live) => ipcRenderer.send("desktop:set-live", live === true),
   notify: (title, body) => ipcRenderer.send("desktop:notify", String(title), String(body)),
   focusWindow: () => ipcRenderer.send("desktop:focus"),
+  onOpenTransmitRequested: (listener) => {
+    // Main keeps the link until taken: one that started the app arrived before this ran.
+    const take = async () => {
+      const link = (await ipcRenderer.invoke("desktop:take-open-transmit")) as {
+        roomId: string;
+        guildId: string | null;
+      } | null;
+      if (link) listener(link);
+    };
+    const handler = () => void take();
+    ipcRenderer.on("desktop:open-transmit", handler);
+    void take();
+    return () => ipcRenderer.removeListener("desktop:open-transmit", handler);
+  },
   onEndLiveRequested: (listener) => {
     ipcRenderer.on("desktop:end-live", () => listener());
   },
