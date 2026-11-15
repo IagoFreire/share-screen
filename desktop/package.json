@@ -1,7 +1,7 @@
 {
   "name": "@screenshare-bot/desktop",
   "productName": "Janja",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "description": "Janja: lives de tela no Discord, app para Windows",
   "author": "Iago Freire",
@@ -51,6 +51,12 @@
       "repo": "share-screen",
       "releaseType": "release"
     },
+    "protocols": [
+      {
+        "name": "Janja",
+        "schemes": ["janja"]
+      }
+    ],
     "extraResources": [
       {
         "from": "native/audio-helper/target/release/audio-helper.exe",
