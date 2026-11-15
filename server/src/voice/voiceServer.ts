@@ -169,6 +169,20 @@ export const voiceRoomLives = {
   livesChanged: (): void => broadcastRooms(),
 };
 
+/**
+ * Asks every Janja signed in as `userId` to open its transmit dialog for `roomId` (see
+ * open-in-desktop). Returns whether any was there to ask.
+ */
+export function openTransmitInDesktop(userId: string, roomId: string, guildId: string | null): boolean {
+  let reached = false;
+  for (const [ws, profile] of profiles) {
+    if (profile.userId !== userId || ws.readyState !== ws.OPEN) continue;
+    send(ws, { kind: "open-transmit", roomId, guildId });
+    reached = true;
+  }
+  return reached;
+}
+
 export function handleVoiceMessage(ws: WebSocket, data: Uint8Array): void {
   const frame = decodeVoiceFrame(data);
   if (frame.type === FrameType.Control) handleControl(ws, decodeVoiceControl(frame));

@@ -329,6 +329,10 @@ function registerIpc(): void {
     notification.show();
   });
 
+  ipcMain.on("desktop:focus", (event) => {
+    if (isTrustedSender(event)) showMainWindow();
+  });
+
   ipcMain.on("desktop:window", (event, action: unknown) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     if (!window || !isTrustedSender(event)) return;

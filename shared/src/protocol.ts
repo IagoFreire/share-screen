@@ -251,6 +251,15 @@ export type ControlMessage =
    * it means "end my own", which anyone may do.
    */
   | { kind: "request-stop-presenting"; slot?: number }
+  /**
+   * Activity -> server: "Compartilhar tela" wants to go live from this user's Janja app
+   * instead of a browser tab. The relay asks every Janja signed in as this user (on the
+   * /voice socket) to open its transmit window for this room, then answers with
+   * open-in-desktop-result; `opened: false` means no Janja is open, so the Activity
+   * falls back to present.html.
+   */
+  | { kind: "open-in-desktop" }
+  | { kind: "open-in-desktop-result"; opened: boolean }
   /** Broadcast whenever a stream starts or stops, replacing the whole list so viewers
    *  never have to reconstruct it from deltas. */
   | { kind: "streams-changed"; streams: StreamInfo[] }

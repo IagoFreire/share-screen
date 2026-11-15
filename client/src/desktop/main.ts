@@ -9,7 +9,7 @@ import { startDesktopBroadcast, type LiveAudience } from "./broadcast.js";
 import { h } from "./dom.js";
 import { relayWsUrl, startDesktopApp, voiceWsUrl, type DesktopApp } from "./desktopApp.js";
 import { createJoinChime, playJoinChime } from "./joinChime.js";
-import { createLiveController } from "./liveController.js";
+import { createLiveController, type BroadcastTarget } from "./liveController.js";
 import { renderLoginScreen } from "./views/loginScreen.js";
 import { titleBar } from "./views/shell.js";
 import { confirmDialog, openTransmitModal } from "./views/transmitModal.js";
@@ -71,12 +71,34 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
       }),
   });
 
+  function openTransmit(place: BroadcastTarget & { name: string }): void {
+    openTransmitModal(api, {
+      channelName: place.name,
+      onGoLive: (sourceId, quality, audio) =>
+        live.goLive(sourceId, quality, { roomId: place.roomId, guildId: place.guildId }, audio),
+    });
+  }
+
+  /**
+   * "Compartilhar tela" in the Discord Activity, routed here by the relay: come to the
+   * front and offer the transmit dialog for the Activity's channel. Already live (or a
+   * dialog already open), the window just comes up -- nothing is ended for you.
+   */
+  function openTransmitFromActivity(target: BroadcastTarget): void {
+    if (api.focusWindow) api.focusWindow();
+    else api.notify("Compartilhar tela", "Abra a Janja para escolher o que transmitir.");
+    if (live.isLive || document.querySelector(".desk-modal")) return;
+    const here = app?.transmitPlace();
+    openTransmit({ ...target, name: here?.roomId === target.roomId ? here.name : "canal de voz" });
+  }
+
   const voiceRooms = startVoiceSession({
     url: voiceWsUrl(),
     session: login.session,
     name: login.user.globalName ?? login.user.username,
     avatarUrl: login.user.avatarUrl,
     onSessionInvalid: () => app?.logOut(),
+    onOpenTransmit: openTransmitFromActivity,
   });
 
   app = startDesktopApp(content, api, login, {
@@ -86,12 +108,7 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
         return;
       }
       const place = app?.transmitPlace();
-      if (!place) return;
-      openTransmitModal(api, {
-        channelName: place.name,
-        onGoLive: (sourceId, quality, audio) =>
-          live.goLive(sourceId, quality, { roomId: place.roomId, guildId: place.guildId }, audio),
-      });
+      if (place) openTransmit(place);
     },
     isLive: () => live.isLive,
     audience: () => (live.isLive ? audience : null),

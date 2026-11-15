@@ -83,6 +83,11 @@ export type VoiceServerMessage =
   | { kind: "rooms"; rooms: VoiceRoomInfo[]; enabled: boolean }
   /** Where this connection is now; null when it isn't in a room (left, or joined elsewhere). */
   | { kind: "in-room"; roomId: string | null; slot: number | null }
+  /**
+   * The same user clicked "Compartilhar tela" in the Discord Activity (open-in-desktop):
+   * bring the window up and open the transmit dialog for that relay room.
+   */
+  | { kind: "open-transmit"; roomId: string; guildId: string | null }
   | { kind: "error"; message: string; code?: "invalid-session" };
 
 const textEncoder = new TextEncoder();

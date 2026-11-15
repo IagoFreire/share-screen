@@ -102,6 +102,8 @@ export interface VoiceSessionOptions {
   name: string;
   avatarUrl: string | null;
   onSessionInvalid(): void;
+  /** "Compartilhar tela" in the Discord Activity asked this app to go live in that relay room. */
+  onOpenTransmit?(target: { roomId: string; guildId: string | null }): void;
 }
 
 const RECONNECT_DELAY_MS = 1500;
@@ -290,6 +292,11 @@ export function startVoiceSession(options: VoiceSessionOptions): VoiceSession {
           sendState();
         } else {
           exitRoom();
+        }
+        return;
+      case "open-transmit":
+        if (typeof message.roomId === "string" && message.roomId) {
+          options.onOpenTransmit?.({ roomId: message.roomId, guildId: message.guildId ?? null });
         }
         return;
       case "error":

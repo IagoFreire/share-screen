@@ -32,6 +32,7 @@ const api: DesktopApi = {
   logout: () => ipcRenderer.invoke("desktop:logout") as Promise<void>,
   setLive: (live) => ipcRenderer.send("desktop:set-live", live === true),
   notify: (title, body) => ipcRenderer.send("desktop:notify", String(title), String(body)),
+  focusWindow: () => ipcRenderer.send("desktop:focus"),
   onEndLiveRequested: (listener) => {
     ipcRenderer.on("desktop:end-live", () => listener());
   },
