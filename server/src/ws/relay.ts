@@ -5,6 +5,7 @@ import {
   encodeControlMessage,
   encodeFrame,
   FrameType,
+  isAlertSound,
   MAX_STREAM_GAIN,
   SLOT_PRESENTER,
   type ControlMessage,
@@ -645,7 +646,9 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       if (!room) return;
 
       const presenter = room.getPresenter(message.slot);
-      if (presenter) send(presenter.ws, { kind: "play-alert" });
+      // An unknown sound plays the knock rather than nothing.
+      const sound = isAlertSound(message.sound) ? message.sound : "knock";
+      if (presenter) send(presenter.ws, { kind: "play-alert", sound });
       return;
     }
 

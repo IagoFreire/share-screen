@@ -1,8 +1,10 @@
 import {
   AUDIO_QUALITY_DEFAULT,
   AUDIO_QUALITY_PRESETS,
+  isAlertSound,
   isAppExeName,
   planLayers,
+  type AlertSound,
   type AppAudioStatus,
   type ControlMessage,
   type QualityPreset,
@@ -58,8 +60,8 @@ export interface BroadcastOptions {
   selectSource(id: string, options: { audio: boolean }): Promise<void>;
   /** Who receives this broadcast (see audience-changed). */
   onAudience(audience: LiveAudience): void;
-  /** Someone used "bater na porta" on this broadcast. */
-  onAlert(): void;
+  /** Someone used the alert button on this broadcast, with this sound. */
+  onAlert(sound: AlertSound): void;
   /** The broadcast ended because of the relay or the network, not the user. */
   onInterrupted(message: string): void;
 }
@@ -213,7 +215,7 @@ export async function startDesktopBroadcast(
       }
       return;
     }
-    if (message.kind === "play-alert") options.onAlert();
+    if (message.kind === "play-alert") options.onAlert(isAlertSound(message.sound) ? message.sound : "knock");
     else if (message.kind === "set-app-audio-disabled") setAppDisabled(message.exe, message.disabled);
     else if (message.kind === "error") finish({ interrupted: `A transmissão foi encerrada: ${message.message}` });
   };

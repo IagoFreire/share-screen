@@ -28,6 +28,7 @@ import { pickServerOrigin, serverOriginCandidates } from "./serverOrigin";
 import { createUpdateTracker } from "./updates";
 import { DEEP_LINK_SCHEME, findTransmitLink, type TransmitLink } from "./deepLink";
 import { mainWindowWebPreferences } from "./windowOptions";
+import { MAX_SYSTEM_SOUND_BYTES, systemSoundPath } from "./systemSounds";
 
 /**
  * Electron main process. The window is a thin shell around desktop.html, which the
@@ -336,6 +337,20 @@ function registerIpc(): void {
 
   ipcMain.on("desktop:audio-stop", (event) => {
     if (isTrustedSender(event)) stopAppAudio();
+  });
+
+  // Windows' device sound for the alert button, read from this PC (systemSounds.ts).
+  ipcMain.handle("desktop:alert-sound", async (event, sound: unknown) => {
+    assertTrustedSender(event);
+    const file = systemSoundPath(sound, process.env.SystemRoot);
+    if (!file) return null;
+    try {
+      const stat = await fs.promises.stat(file);
+      if (!stat.isFile() || stat.size > MAX_SYSTEM_SOUND_BYTES) return null;
+      return new Uint8Array(await fs.promises.readFile(file));
+    } catch {
+      return null; // No such sound on this Windows: the page imitates it.
+    }
   });
 
   // Apps an admin took out of the running live (set-app-audio-disabled), the whole list.

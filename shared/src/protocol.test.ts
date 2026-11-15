@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildQualityPreset, planLayers, POTATO_PRESET } from "./constants.js";
-import { decodeFrame, encodeFrame, FrameType } from "./protocol.js";
+import { decodeFrame, encodeFrame, FrameType, isAlertSound } from "./protocol.js";
 
 describe("frame encoding", () => {
   it("encodeFrame/decodeFrame round-trips header and payload", () => {
@@ -58,5 +58,18 @@ describe("planLayers", () => {
     expect(planLayers(POTATO_PRESET)).toEqual([POTATO_PRESET]);
     expect(POTATO_PRESET.lowPower).toBe(true);
     expect(buildQualityPreset("720p", 30, "balanced").lowPower).toBeUndefined();
+  });
+});
+
+describe("isAlertSound", () => {
+  it("accepts the sounds an alert can play", () => {
+    expect(isAlertSound("knock")).toBe(true);
+    expect(isAlertSound("usb-in")).toBe(true);
+    expect(isAlertSound("usb-out")).toBe(true);
+  });
+
+  it("rejects anything else", () => {
+    expect(isAlertSound("airhorn")).toBe(false);
+    expect(isAlertSound(undefined)).toBe(false);
   });
 });

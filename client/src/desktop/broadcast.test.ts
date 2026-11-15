@@ -115,6 +115,19 @@ function fakeAppAudio(): { appAudio: DesktopAppAudio; disabledCalls: string[][] 
   return { appAudio, disabledCalls };
 }
 
+describe("desktop broadcast: alerts", () => {
+  it("plays the sound the moderator picked, the knock when none was named", async () => {
+    const sounds: string[] = [];
+    const { goLive, handlers } = setup(QUALITY, { onAlert: (sound) => sounds.push(sound) });
+    await goLive();
+
+    handlers().onControl({ kind: "play-alert", sound: "usb-in" });
+    handlers().onControl({ kind: "play-alert" });
+
+    expect(sounds).toEqual(["usb-in", "knock"]);
+  });
+});
+
 describe("desktop broadcast: apps an admin takes out", () => {
   const APPS_AUDIO = { mode: "apps", exclude: ["Discord.exe"] } as const;
 

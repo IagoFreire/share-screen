@@ -87,6 +87,11 @@ export interface DesktopApi {
   setLive(live: boolean): void;
   /** A Windows notification, for when the window is hidden or minimized. */
   notify(title: string, body: string): void;
+  /**
+   * Windows' own device connected/disconnected sound (for the alert button), or null
+   * when this PC doesn't have it. Missing before 0.11.0.
+   */
+  alertSound?(sound: "usb-in" | "usb-out"): Promise<Uint8Array | null>;
   /** Brings the window up from the tray or behind other windows. Missing before 0.9.0. */
   focusWindow?(): void;
   /**

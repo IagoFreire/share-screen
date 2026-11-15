@@ -35,6 +35,7 @@ import {
 import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } from "./broadcastsPanel.js";
 import { createQualityMenu, type QualityChoice } from "./qualityMenu.js";
 import { createAppAudioControl } from "./appAudioControl.js";
+import { attachAlertMenu } from "./alertMenu.js";
 import { createGainControl } from "./gainControl.js";
 import { createViewersMenu } from "./viewersMenu.js";
 import { createLoadingOverlay } from "./loadingOverlay.js";
@@ -741,17 +742,10 @@ export function mountApp(options: MountAppOptions): void {
     }, JUMP_TO_LIVE_COOLDOWN_MS);
   });
 
-  alertButton.addEventListener("click", () => {
+  // The bell opens a list of sounds to play at the presenter (see alertMenu.ts).
+  attachAlertMenu(alertButton, (sound) => {
     const stream = currentStream();
-    if (!stream || alertButton.disabled) return;
-
-    wsClient.sendControl({ kind: "play-alert", slot: stream.slot });
-    // Brief lockout after each chime: the sound lasts about half a second, and without
-    // this an impatient double-click stacks overlapping tones in the presenter's ears.
-    alertButton.disabled = true;
-    setTimeout(() => {
-      alertButton.disabled = false;
-    }, 2000);
+    if (stream) wsClient.sendControl({ kind: "play-alert", slot: stream.slot, sound });
   });
 
   // Ends the broadcast on a single click, no confirmation step. Deliberately not

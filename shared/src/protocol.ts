@@ -106,6 +106,17 @@ export interface AppAudioStatus {
   apps: Array<{ exe: string; state: AppAudioState }>;
 }
 
+/**
+ * What play-alert plays at the presenter: the door knock, or Windows' "device
+ * connected" / "device disconnected" sounds. Missing means the knock (older clients).
+ */
+export type AlertSound = "knock" | "usb-in" | "usb-out";
+export const ALERT_SOUNDS: readonly AlertSound[] = ["knock", "usb-in", "usb-out"];
+
+export function isAlertSound(value: unknown): value is AlertSound {
+  return ALERT_SOUNDS.includes(value as AlertSound);
+}
+
 /** A bare executable name, never a path or a list -- what per-app audio is keyed by. */
 const APP_EXE_NAME_PATTERN = /^[^\\/:*?"<>|,\r\n]{1,100}\.exe$/i;
 
@@ -293,7 +304,7 @@ export type ControlMessage =
    * With `slot` it's the admin asking; the server then relays it without one to that
    * slot's presenter, mirroring how request-stop-presenting works.
    */
-  | { kind: "play-alert"; slot?: number }
+  | { kind: "play-alert"; slot?: number; sound?: AlertSound }
   /**
    * The broadcast list: this channel's broadcasts for everyone, every broadcast on the
    * relay (other Discord servers included) for an admin. Polled by the client while the

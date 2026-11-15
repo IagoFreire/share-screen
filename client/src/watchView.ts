@@ -31,6 +31,7 @@ import {
 import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } from "./ui/broadcastsPanel.js";
 import { createQualityMenu, type QualityChoice } from "./ui/qualityMenu.js";
 import { createAppAudioControl } from "./ui/appAudioControl.js";
+import { attachAlertMenu } from "./ui/alertMenu.js";
 import { createGainControl } from "./ui/gainControl.js";
 import { createViewersMenu } from "./ui/viewersMenu.js";
 import { browserHiddenWatch } from "./ui/hiddenWatch.js";
@@ -771,16 +772,10 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     void selectStream(slot);
   });
 
-  // Brief lockout after each chime -- see App.ts.
-  alertButton.addEventListener("click", () => {
+  // The bell opens a list of sounds to play at the presenter (see ui/alertMenu.ts).
+  attachAlertMenu(alertButton, (sound) => {
     const stream = currentStream();
-    if (!stream || alertButton.disabled) return;
-
-    wsClient.sendControl({ kind: "play-alert", slot: stream.slot });
-    alertButton.disabled = true;
-    setTimeout(() => {
-      alertButton.disabled = false;
-    }, 2000);
+    if (stream) wsClient.sendControl({ kind: "play-alert", slot: stream.slot, sound });
   });
 
   // Single click, no confirmation -- matches the Activity (see App.ts for why

@@ -4,7 +4,8 @@ import "../ui/app.css";
 import "./desktop.css";
 // Fingerprinted by Vite, like present.ts's copy, so a changed sound is never served stale.
 import doorKnockUrl from "../../assets/DoorKnock.mp3";
-import type { DesktopApi, StoredLogin } from "@screenshare-bot/shared";
+import type { AlertSound, DesktopApi, StoredLogin } from "@screenshare-bot/shared";
+import { browserAlertPlayer } from "../alertSounds.js";
 import { startDesktopBroadcast, type LiveAudience } from "./broadcast.js";
 import { h } from "./dom.js";
 import { relayWsUrl, startDesktopApp, voiceWsUrl, type DesktopApp } from "./desktopApp.js";
@@ -30,18 +31,17 @@ const voteMemory = browserVoteMemory();
 
 function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin): void {
   let audience: LiveAudience | null = null;
-  /** One element, rewound per alert -- see present.ts's playAlertChime. */
-  let alertAudio: HTMLAudioElement | null = null;
+  /** The knock, or Windows' own device sounds read from this PC (alertSounds.ts). */
+  const playAlert = browserAlertPlayer(doorKnockUrl, api.alertSound ? (sound) => api.alertSound!(sound) : undefined);
   // Assigned right below; the hooks only run after the app has started.
   let app: DesktopApp | null = null;
   /** "Someone opened your live" (joinChime.ts). */
   const joinChime = createJoinChime({ now: () => Date.now(), play: playJoinChime });
 
-  function playKnock(): void {
-    alertAudio ??= new Audio(doorKnockUrl);
-    alertAudio.currentTime = 0;
-    alertAudio.play().catch((error: unknown) => console.error("Failed to play alert sound:", error));
-    if (document.hidden) api.notify("Alguém bateu na porta", "Abra a Janja para ver.");
+  function onAlert(sound: AlertSound): void {
+    playAlert(sound);
+    // Only the knock says who it was: a device sound has to pass for the real thing.
+    if (sound === "knock" && document.hidden) api.notify("Alguém bateu na porta", "Abra a Janja para ver.");
   }
 
   const live = createLiveController({
@@ -58,7 +58,7 @@ function startLoggedIn(api: DesktopApi, content: HTMLElement, login: StoredLogin
           audience = next;
           app?.refreshUserPanel();
         },
-        onAlert: playKnock,
+        onAlert,
         onInterrupted: (message) => api.notify("Sua transmissão parou", message),
       }),
     setLive: (isLive) => api.setLive(isLive),

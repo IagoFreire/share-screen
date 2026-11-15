@@ -1320,6 +1320,42 @@ body.viewer .status {
   font-size: 12px;
 }
 
+/* --- Alert sounds: the bell's list (see ui/alertMenu.ts) --- */
+.alert-pop {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 210px;
+}
+
+.alert-pop[hidden] {
+  display: none;
+}
+
+.alert-pop .gain-title {
+  margin-bottom: 6px;
+}
+
+.alert-option {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: #2b2d31;
+  color: #dbdee1;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.alert-option:hover,
+.alert-option:focus-visible {
+  background: #404249;
+  color: #f2f3f5;
+  outline: none;
+}
+
 /* --- Quality picker (simulcast broadcasts from the desktop app) --- */
 .quality-menu {
   position: relative;

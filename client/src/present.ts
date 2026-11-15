@@ -5,8 +5,10 @@ import "./ui/app.css";
 // filename, so a changed sound can never be masked by Discord's proxy serving a cached
 // copy of a stable URL -- the same trap that bit the stylesheet earlier in this project.
 import doorKnockUrl from "../assets/DoorKnock.mp3";
+import { browserAlertPlayer } from "./alertSounds.js";
 import {
   buildQualityPreset,
+  isAlertSound,
   type BitrateLevelKey,
   type ControlMessage,
   type FramerateKey,
@@ -130,8 +132,8 @@ function main(): void {
     window.location.href = janjaLink;
   }
 
-  /** Lazily created on the first alert; see playAlertChime. */
-  let alertAudio: HTMLAudioElement | null = null;
+  /** The knock, or an imitation of Windows' device sounds (alertSounds.ts). */
+  const playAlert = browserAlertPlayer(doorKnockUrl);
 
   // Restore the previous choice so a presenter who always uses, say, 720p30 doesn't
   // have to re-pick it every time the Activity opens this tab.
@@ -259,7 +261,7 @@ function main(): void {
         return;
       // A moderator is trying to get this presenter's attention.
       case "play-alert":
-        playAlertChime();
+        playAlert(isAlertSound(message.sound) ? message.sound : "knock");
         return;
       default:
         return;
@@ -304,21 +306,8 @@ function main(): void {
     }
   }
 
-  /**
-   * Plays the knock sound for a moderator trying to get this presenter's attention.
-   *
-   * One element, reused and rewound, rather than a new Audio() per alert: that keeps
-   * the file decoded and ready so the sound fires immediately, and stops repeated
-   * alerts from layering on top of each other.
-   *
-   * Autoplay policy isn't a concern here: this tab only ever reaches the presenting
-   * state through a click on "Compartilhar tela", so it always has user activation.
-   */
-  function playAlertChime(): void {
-    alertAudio ??= new Audio(doorKnockUrl);
-    alertAudio.currentTime = 0;
-    alertAudio.play().catch((error) => console.error("Failed to play alert sound:", error));
-  }
+  // Autoplay policy isn't a concern for the alert: this tab only ever reaches the
+  // presenting state through a click on "Compartilhar tela", so it has user activation.
 
   function stopPresenting(): void {
     session.stop();

@@ -32,6 +32,7 @@ const api: DesktopApi = {
   logout: () => ipcRenderer.invoke("desktop:logout") as Promise<void>,
   setLive: (live) => ipcRenderer.send("desktop:set-live", live === true),
   notify: (title, body) => ipcRenderer.send("desktop:notify", String(title), String(body)),
+  alertSound: (sound) => ipcRenderer.invoke("desktop:alert-sound", sound) as Promise<Uint8Array | null>,
   focusWindow: () => ipcRenderer.send("desktop:focus"),
   onOpenTransmitRequested: (listener) => {
     // Main keeps the link until taken: one that started the app arrived before this ran.
