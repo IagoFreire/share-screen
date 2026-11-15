@@ -24,7 +24,7 @@ import { createKeyframeThrottle } from "./keyframeThrottle.js";
 import { sanitizeAudioStatus } from "./audioStatus.js";
 import { countSpectators, listRoomPeople } from "./viewerList.js";
 import { canPresentIn, specialRoomAccess } from "./roomAccess.js";
-import { voiceRoomLives } from "../voice/voiceServer.js";
+import { openTransmitInDesktop, voiceRoomLives } from "../voice/voiceServer.js";
 
 /** The frame header carries the layer in 2 bits. */
 const MAX_LAYERS = 4;
@@ -695,6 +695,18 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       if (!state.roomId || state.selectedSlot === null) return;
       const room = roomManager.getRoom(state.roomId);
       if (room) requestKeyframeFromSlot(room, state.selectedSlot, effectiveLayer(state, room, state.selectedSlot));
+      return;
+    }
+
+    // "Compartilhar tela" in the Activity, routed to the user's open Janja when there is
+    // one. Only for a connection that already joined: its room is where the app goes live.
+    case "open-in-desktop": {
+      if (!state.roomId || !state.userId) {
+        send(ws, { kind: "open-in-desktop-result", opened: false });
+        return;
+      }
+      const guildId = roomManager.getRoom(state.roomId)?.guildId ?? null;
+      send(ws, { kind: "open-in-desktop-result", opened: openTransmitInDesktop(state.userId, state.roomId, guildId) });
       return;
     }
 

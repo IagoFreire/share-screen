@@ -47,6 +47,9 @@ const DESKTOP_APP_DOWNLOAD_URL = "https://github.com/IagoFreire/share-screen/rel
  */
 const JUMP_TO_LIVE_COOLDOWN_MS = 1500;
 
+/** How long "Compartilhar tela" waits to hear whether the Janja app took over before opening the browser. */
+const OPEN_IN_DESKTOP_TIMEOUT_MS = 1500;
+
 export interface MountAppOptions {
   roomId: string;
   wsUrl: string;
@@ -506,6 +509,10 @@ export function mountApp(options: MountAppOptions): void {
         if (hasPresenter()) wsClient.sendControl({ kind: "request-keyframe" });
         return;
 
+      case "open-in-desktop-result":
+        settleDesktopOpen?.(message.opened);
+        return;
+
       case "room-full":
         setPageStatus("Sala cheia - não foi possível entrar.");
         returnFromFailedHop();
@@ -592,9 +599,40 @@ export function mountApp(options: MountAppOptions): void {
       // The capture lives in the presenter tab, so the server relays this to it.
       wsClient.sendControl({ kind: "request-stop-presenting" });
     } else {
-      void openPresenterTab();
+      void shareFromDesktopOrBrowser();
     }
   });
+
+  /** Answers the pending open-in-desktop request; null when none is waiting. */
+  let settleDesktopOpen: ((opened: boolean) => void) | null = null;
+
+  /**
+   * Asks the relay to open the transmit dialog in this user's Janja app; resolves false
+   * when no Janja is open (or the relay doesn't answer in time), so the caller falls back
+   * to the browser tab.
+   */
+  function openInDesktopApp(): Promise<boolean> {
+    settleDesktopOpen?.(false); // a double click: the older request gives up
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => settle(false), OPEN_IN_DESKTOP_TIMEOUT_MS);
+      function settle(opened: boolean): void {
+        clearTimeout(timer);
+        if (settleDesktopOpen === settle) settleDesktopOpen = null;
+        resolve(opened);
+      }
+      settleDesktopOpen = settle;
+      wsClient.sendControl({ kind: "open-in-desktop" });
+    });
+  }
+
+  /** "Compartilhar tela": the Janja app when it is open, a browser tab otherwise. */
+  async function shareFromDesktopOrBrowser(): Promise<void> {
+    if (await openInDesktopApp()) {
+      setPageStatus("Abrimos a Janja: escolha a tela lá para começar a transmitir.");
+      return;
+    }
+    await openPresenterTab();
+  }
 
   async function openPresenterTab(): Promise<void> {
     const params = new URLSearchParams({ room: roomId, user: userId });

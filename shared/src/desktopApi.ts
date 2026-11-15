@@ -82,6 +82,8 @@ export interface DesktopApi {
   setLive(live: boolean): void;
   /** A Windows notification, for when the window is hidden or minimized. */
   notify(title: string, body: string): void;
+  /** Brings the window up from the tray or behind other windows. Missing before 0.9.0. */
+  focusWindow?(): void;
   /** The tray's "Encerrar transmissão" was clicked. */
   onEndLiveRequested(listener: () => void): void;
   appAudio: DesktopAppAudio;
