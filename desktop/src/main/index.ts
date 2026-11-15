@@ -338,6 +338,13 @@ function registerIpc(): void {
     if (isTrustedSender(event)) stopAppAudio();
   });
 
+  // Apps an admin took out of the running live (set-app-audio-disabled), the whole list.
+  ipcMain.on("desktop:audio-disable", (event, exes: unknown) => {
+    if (!isTrustedSender(event)) return;
+    if (!Array.isArray(exes) || exes.length > MAX_EXCLUDED_APPS || !exes.every(isExeName)) return;
+    appAudio?.setDisabled(exes);
+  });
+
   ipcMain.on("desktop:notify", (event, title: unknown, body: unknown) => {
     if (!isTrustedSender(event) || !isNotification(title, body) || !Notification.isSupported()) return;
     const notification = new Notification({ title: title as string, body: body as string });

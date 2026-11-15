@@ -1,6 +1,7 @@
 import {
   AUDIO_QUALITY_DEFAULT,
   AUDIO_QUALITY_PRESETS,
+  isAppExeName,
   planLayers,
   type AppAudioStatus,
   type ControlMessage,
@@ -174,6 +175,17 @@ export async function startDesktopBroadcast(
     presenterId: options.userId,
   });
 
+  // Apps an admin took out of this live (set-app-audio-disabled). Lives and dies with
+  // the broadcast: the presenter isn't shown it and can't undo it -- a new live starts
+  // with every app back.
+  let disabledApps: readonly string[] = [];
+  function setAppDisabled(exe: string, disabled: boolean): void {
+    if (audio.mode !== "apps" || !appAudio?.setDisabled || !isAppExeName(exe)) return;
+    const others = disabledApps.filter((name) => name.toLowerCase() !== exe.toLowerCase());
+    disabledApps = disabled ? [...others, exe] : others;
+    appAudio.setDisabled([...disabledApps]);
+  }
+
   let finished = false;
   const endedListeners: Array<() => void> = [];
 
@@ -202,6 +214,7 @@ export async function startDesktopBroadcast(
       return;
     }
     if (message.kind === "play-alert") options.onAlert();
+    else if (message.kind === "set-app-audio-disabled") setAppDisabled(message.exe, message.disabled);
     else if (message.kind === "error") finish({ interrupted: `A transmissão foi encerrada: ${message.message}` });
   };
 

@@ -28,6 +28,7 @@ const CAPTURE_STATES: Record<AppAudioState, string> = {
   muted: "✗ toca, mas a captura sai muda",
   silent: "pai mudo, trocado pelos apps de dentro",
   failed: "✗ a captura falhou",
+  disabled: "desligado por um admin",
 };
 
 function captureLine(capture: AppAudioStatus): string {

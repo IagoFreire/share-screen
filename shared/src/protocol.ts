@@ -97,12 +97,21 @@ export interface AudioParams {
  * through a parent process's capture, "quiet" captured but silent right now, "muted"
  * playing yet its capture is silent, "silent" a parent dropped for staying silent while
  * an app inside it played (its apps are captured on their own), "failed" a capture that
- * errored. Shown to admins in the stats overlay.
+ * errored, "disabled" taken out of the live by an admin (set-app-audio-disabled). Shown
+ * to admins in the stats overlay.
  */
-export type AppAudioState = "ok" | "covered" | "quiet" | "muted" | "silent" | "failed";
+export type AppAudioState = "ok" | "covered" | "quiet" | "muted" | "silent" | "failed" | "disabled";
 
 export interface AppAudioStatus {
   apps: Array<{ exe: string; state: AppAudioState }>;
+}
+
+/** A bare executable name, never a path or a list -- what per-app audio is keyed by. */
+const APP_EXE_NAME_PATTERN = /^[^\\/:*?"<>|,\r\n]{1,100}\.exe$/i;
+
+/** An app an admin may take out of a live (set-app-audio-disabled), as the helper names it. */
+export function isAppExeName(value: unknown): value is string {
+  return typeof value === "string" && APP_EXE_NAME_PATTERN.test(value);
 }
 
 /**
@@ -348,6 +357,12 @@ export type ControlMessage =
    * sound" can be diagnosed without touching their PC. Null when it never sent one.
    */
   | { kind: "audio-status"; slot: number; status: AppAudioStatus | null }
+  /**
+   * Admin -> server (with `slot`), then server -> that slot's presenter (without): take
+   * one app (by exe name) out of the live's per-app audio, or put it back. Only admins
+   * can; the presenter isn't told and can't undo it -- it lasts until that live ends.
+   */
+  | { kind: "set-app-audio-disabled"; slot?: number; exe: string; disabled: boolean }
   /** Viewer -> server, and server -> presenter; `layer` (to the presenter) names the encoder. */
   | { kind: "request-keyframe"; layer?: number }
   /**

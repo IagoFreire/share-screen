@@ -21,7 +21,7 @@ import { pausesSiblingConnections, resolveJoinIdentity, startsWatchingNothing } 
 import { createAutoLayer, type AutoLayer } from "./autoLayer.js";
 import { presenterAudience, videoLayersInUse } from "./audience.js";
 import { createKeyframeThrottle } from "./keyframeThrottle.js";
-import { sanitizeAudioStatus } from "./audioStatus.js";
+import { isAppExeName, sanitizeAudioStatus } from "./audioStatus.js";
 import { countSpectators, listRoomPeople } from "./viewerList.js";
 import { canPresentIn, specialRoomAccess } from "./roomAccess.js";
 import { openTransmitInDesktop, voiceRoomLives } from "../voice/voiceServer.js";
@@ -658,6 +658,20 @@ function handleControlMessage(ws: WebSocket, message: ControlMessage): void {
       if (!room || !status) return;
       room.setAudioStatus(state.presenterSlot, status);
       sendAudioStatusToAdmins(room, state.presenterSlot);
+      return;
+    }
+
+    // Admin-only, re-checked here like play-alert: take one app out of (or back into) a
+    // desktop presenter's per-app audio. Relayed without the slot; the presenter keeps
+    // the list for that live only and its helper reports the app as "disabled".
+    case "set-app-audio-disabled": {
+      if (!state.roomId || !isAdmin(state.userId) || !Number.isInteger(message.slot)) return;
+      if (!isAppExeName(message.exe) || typeof message.disabled !== "boolean") return;
+      const room = roomManager.getRoom(state.roomId);
+      const presenter = room?.getPresenter(message.slot as number);
+      if (presenter) {
+        send(presenter.ws, { kind: "set-app-audio-disabled", exe: message.exe, disabled: message.disabled });
+      }
       return;
     }
 

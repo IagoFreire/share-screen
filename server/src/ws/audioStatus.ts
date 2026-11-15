@@ -1,8 +1,9 @@
 import type { AppAudioState, AppAudioStatus } from "@screenshare-bot/shared";
 
-const STATES: readonly AppAudioState[] = ["ok", "covered", "quiet", "muted", "silent", "failed"];
+const STATES: readonly AppAudioState[] = ["ok", "covered", "quiet", "muted", "silent", "failed", "disabled"];
 const MAX_APPS = 32;
 const MAX_EXE_LENGTH = 100;
+export { isAppExeName } from "@screenshare-bot/shared";
 
 /**
  * A presenter's per-app capture status (presenter-audio-status), checked before the

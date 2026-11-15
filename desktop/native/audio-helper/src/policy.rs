@@ -33,6 +33,30 @@ impl ExclusionPolicy {
         let exe = exe.to_lowercase();
         !self.excluded_exes.iter().any(|excluded| *excluded == exe)
     }
+
+    /// This policy plus the apps an admin took out of the live (see parse_disable_command).
+    pub fn with_disabled(&self, disabled: &[String]) -> Self {
+        let mut excluded_exes = self.excluded_exes.clone();
+        excluded_exes.extend(disabled.iter().map(|exe| exe.to_lowercase()));
+        Self { excluded_exes, excluded_root_pid: self.excluded_root_pid }
+    }
+}
+
+/// The app sends `disable a.exe,b.exe` on stdin whenever an admin changes which apps are
+/// out of the live; each line replaces the whole list, so `disable` alone puts every app
+/// back. None for any other line.
+pub fn parse_disable_command(line: &str) -> Option<Vec<String>> {
+    let line = line.trim_end_matches(['\r', '\n']);
+    let rest = line.strip_prefix("disable")?;
+    if !rest.is_empty() && !rest.starts_with(' ') {
+        return None;
+    }
+    Some(rest.trim().split(',').map(str::trim).filter(|exe| !exe.is_empty()).map(String::from).collect())
+}
+
+/// Whether an admin took `exe` out of the live.
+pub fn is_disabled(disabled: &[String], exe: &str) -> bool {
+    disabled.iter().any(|name| name.eq_ignore_ascii_case(exe))
 }
 
 /// One running process: what the exclusion rules need to know about it.
@@ -188,6 +212,55 @@ mod tests {
         let mut mix = vec![1.5, -2.0, 0.25];
         clamp_all(&mut mix);
         assert_eq!(mix, vec![1.0, -1.0, 0.25]);
+    }
+
+    #[test]
+    fn reads_the_admins_list_from_a_disable_command() {
+        assert_eq!(
+            parse_disable_command("disable Spotify.exe,chrome.exe"),
+            Some(vec!["Spotify.exe".to_string(), "chrome.exe".to_string()])
+        );
+        assert_eq!(parse_disable_command("disable Spotify.exe\r"), Some(vec!["Spotify.exe".to_string()]));
+    }
+
+    #[test]
+    fn an_empty_disable_command_puts_every_app_back() {
+        assert_eq!(parse_disable_command("disable "), Some(vec![]));
+        assert_eq!(parse_disable_command("disable"), Some(vec![]));
+    }
+
+    #[test]
+    fn ignores_lines_that_are_not_a_disable_command() {
+        assert_eq!(parse_disable_command(""), None);
+        assert_eq!(parse_disable_command("enable a.exe"), None);
+        assert_eq!(parse_disable_command("disabled a.exe"), None);
+    }
+
+    #[test]
+    fn apps_an_admin_disabled_stay_out_on_top_of_the_users_list() {
+        let effective = policy().with_disabled(&["Spotify.exe".to_string()]);
+
+        assert!(!effective.includes(42, "spotify.exe", &[1]));
+        assert!(!effective.includes(43, "Discord.exe", &[1]));
+        assert!(!effective.includes(101, "ScreenShare.exe", &[100, 1]));
+        assert!(effective.includes(44, "chrome.exe", &[1]));
+    }
+
+    #[test]
+    fn a_parent_whose_tree_holds_a_disabled_app_is_not_captured() {
+        let table = vec![process(7, "launcher.exe", &[1]), process(8, "Spotify.exe", &[7, 1])];
+        let effective = policy().with_disabled(&["Spotify.exe".to_string()]);
+
+        assert!(policy().safe_to_capture(7, &table));
+        assert!(!effective.safe_to_capture(7, &table));
+    }
+
+    #[test]
+    fn tells_which_apps_an_admin_disabled() {
+        let disabled = ["Spotify.exe".to_string()];
+
+        assert!(is_disabled(&disabled, "SPOTIFY.EXE"));
+        assert!(!is_disabled(&disabled, "chrome.exe"));
     }
 
     #[test]

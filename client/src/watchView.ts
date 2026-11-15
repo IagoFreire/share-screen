@@ -30,6 +30,7 @@ import {
 } from "./ui/icons.js";
 import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } from "./ui/broadcastsPanel.js";
 import { createQualityMenu, type QualityChoice } from "./ui/qualityMenu.js";
+import { createAppAudioControl } from "./ui/appAudioControl.js";
 import { createGainControl } from "./ui/gainControl.js";
 import { createViewersMenu } from "./ui/viewersMenu.js";
 import { browserHiddenWatch } from "./ui/hiddenWatch.js";
@@ -171,6 +172,15 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
   });
   qualityMenu.element.before(gainControl.element);
 
+  // Admin-only: take one app's sound out of a desktop live (see ui/appAudioControl.ts).
+  const appAudioControl = createAppAudioControl((exe, disabled) => {
+    const stream = currentStream();
+    if (stream) wsClient.sendControl({ kind: "set-app-audio-disabled", slot: stream.slot, exe, disabled });
+  });
+  gainControl.element.before(appAudioControl.element);
+  const updateAppAudioControl = () =>
+    appAudioControl.update({ visible: isAdmin && isWatching() && !isSelf(), status: captureStatus });
+
   // Who is in the room, beside the count it names. Lazy like the broadcast list below.
   const viewersMenu = createViewersMenu({
     requestList: () => wsClient.sendControl({ kind: "request-viewers" }),
@@ -272,6 +282,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
     qualityMenu.update(isSelf() ? undefined : currentStream()?.layers, layerChoice, currentLayer);
     // Your own broadcast is never played back to you, so there's nothing to hear louder.
     gainControl.update({ visible: isAdmin && isWatching() && !isSelf(), gain: currentStream()?.gain });
+    updateAppAudioControl();
     audioDecodePipeline?.setStreamGain(currentStream()?.gain ?? 1);
 
     if (streams.length > 1) {
@@ -667,6 +678,7 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
       case "audio-status":
         if (message.slot === currentStream()?.slot) captureStatus = message.status;
+        updateAppAudioControl();
         return;
 
       case "layer-changed":

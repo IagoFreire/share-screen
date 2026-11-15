@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildQualityPreset, POTATO_PRESET, type ControlMessage, type QualityPreset } from "@screenshare-bot/shared";
+import {
+  buildQualityPreset,
+  POTATO_PRESET,
+  type ControlMessage,
+  type DesktopAppAudio,
+  type QualityPreset,
+} from "@screenshare-bot/shared";
 import type { WsClientHandlers } from "../net/wsClient.js";
 import type { PresenterSession } from "../session/presenterSession.js";
 import { audioEncodingFor, startDesktopBroadcast, type BroadcastFactories, type BroadcastOptions } from "./broadcast.js";
@@ -18,7 +24,7 @@ describe("audioEncodingFor", () => {
 const QUALITY = buildQualityPreset("720p", 30, "balanced");
 const TARGET = { roomId: "c1", guildId: "g1" };
 
-function setup(quality: QualityPreset = QUALITY) {
+function setup(quality: QualityPreset = QUALITY, overrides: Partial<BroadcastOptions> = {}) {
   let handlers: WsClientHandlers | null = null;
   const sentControls: ControlMessage[] = [];
   const startedLayers: Array<QualityPreset[] | undefined> = [];
@@ -66,6 +72,7 @@ function setup(quality: QualityPreset = QUALITY) {
     onAudience: (audience) => audiences.push(audience),
     onAlert: () => {},
     onInterrupted: (message) => interruptions.push(message),
+    ...overrides,
   };
 
   async function goLive() {
@@ -92,6 +99,57 @@ function setup(quality: QualityPreset = QUALITY) {
     audiences,
   };
 }
+
+/** A per-app audio bridge that records what the helper was told to leave out. */
+function fakeAppAudio(): { appAudio: DesktopAppAudio; disabledCalls: string[][] } {
+  const disabledCalls: string[][] = [];
+  const appAudio: DesktopAppAudio = {
+    listApps: async () => [],
+    start: async () => {},
+    stop: () => {},
+    onBlock: () => () => {},
+    onEnded: () => {},
+    onStatus: () => () => {},
+    setDisabled: (exes) => disabledCalls.push([...exes]),
+  };
+  return { appAudio, disabledCalls };
+}
+
+describe("desktop broadcast: apps an admin takes out", () => {
+  const APPS_AUDIO = { mode: "apps", exclude: ["Discord.exe"] } as const;
+
+  it("hands the helper the whole list each time an admin changes it", async () => {
+    const { appAudio, disabledCalls } = fakeAppAudio();
+    const { goLive, handlers } = setup(QUALITY, { audio: { ...APPS_AUDIO, exclude: [...APPS_AUDIO.exclude] }, appAudio });
+    await goLive();
+
+    handlers().onControl({ kind: "set-app-audio-disabled", exe: "Spotify.exe", disabled: true });
+    handlers().onControl({ kind: "set-app-audio-disabled", exe: "chrome.exe", disabled: true });
+    handlers().onControl({ kind: "set-app-audio-disabled", exe: "spotify.exe", disabled: false });
+
+    expect(disabledCalls).toEqual([["Spotify.exe"], ["Spotify.exe", "chrome.exe"], ["chrome.exe"]]);
+  });
+
+  it("ignores it when the live doesn't use per-app audio", async () => {
+    const { appAudio, disabledCalls } = fakeAppAudio();
+    const { goLive, handlers } = setup(QUALITY, { audio: { mode: "system" }, appAudio });
+    await goLive();
+
+    handlers().onControl({ kind: "set-app-audio-disabled", exe: "Spotify.exe", disabled: true });
+
+    expect(disabledCalls).toEqual([]);
+  });
+
+  it("ignores a name that isn't an app", async () => {
+    const { appAudio, disabledCalls } = fakeAppAudio();
+    const { goLive, handlers } = setup(QUALITY, { audio: { ...APPS_AUDIO, exclude: [] }, appAudio });
+    await goLive();
+
+    handlers().onControl({ kind: "set-app-audio-disabled", exe: "a.exe,b.exe", disabled: true });
+
+    expect(disabledCalls).toEqual([]);
+  });
+});
 
 describe("desktop broadcast", () => {
   it("joins as a presenter-only connection with the session", async () => {

@@ -34,6 +34,7 @@ import {
 } from "./icons.js";
 import { BROADCASTS_PANEL_HTML, createBroadcastsPanel, syncBroadcastsButton } from "./broadcastsPanel.js";
 import { createQualityMenu, type QualityChoice } from "./qualityMenu.js";
+import { createAppAudioControl } from "./appAudioControl.js";
 import { createGainControl } from "./gainControl.js";
 import { createViewersMenu } from "./viewersMenu.js";
 import { createLoadingOverlay } from "./loadingOverlay.js";
@@ -236,6 +237,15 @@ export function mountApp(options: MountAppOptions): void {
   });
   qualityMenu.element.before(gainControl.element);
 
+  // Admin-only: take one app's sound out of a desktop live (see appAudioControl.ts).
+  const appAudioControl = createAppAudioControl((exe, disabled) => {
+    const stream = currentStream();
+    if (stream) wsClient.sendControl({ kind: "set-app-audio-disabled", slot: stream.slot, exe, disabled });
+  });
+  gainControl.element.before(appAudioControl.element);
+  const updateAppAudioControl = () =>
+    appAudioControl.update({ visible: isAdmin && hasPresenter() && !isWatchingSelf(), status: captureStatus });
+
   // Who is in the room, beside the count it names. Lazy like the broadcast list.
   const viewersMenu = createViewersMenu({
     requestList: () => wsClient.sendControl({ kind: "request-viewers" }),
@@ -248,6 +258,7 @@ export function mountApp(options: MountAppOptions): void {
     qualityMenu.update(isWatchingSelf() ? undefined : currentStream()?.layers, layerChoice, currentLayer);
     // Your own broadcast is never played back to you, so there's nothing to hear louder.
     gainControl.update({ visible: isAdmin && hasPresenter() && !isWatchingSelf(), gain: currentStream()?.gain });
+    updateAppAudioControl();
     audioDecodePipeline?.setStreamGain(currentStream()?.gain ?? 1);
     const presenting = isPresenting();
 
@@ -451,6 +462,7 @@ export function mountApp(options: MountAppOptions): void {
 
       case "audio-status":
         if (message.slot === currentStream()?.slot) captureStatus = message.status;
+        updateAppAudioControl();
         return;
 
       case "layer-changed":

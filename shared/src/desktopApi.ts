@@ -39,6 +39,11 @@ export interface DesktopAppAudio {
    * don't have it. Returns an unsubscribe function.
    */
   onStatus?(listener: (status: AppAudioStatus) => void): () => void;
+  /**
+   * Replaces the apps an admin took out of the running mix (set-app-audio-disabled).
+   * Optional: apps before this existed don't have it.
+   */
+  setDisabled?(exes: string[]): void;
 }
 
 /** Where the app's own update stands (electron-updater, from the GitHub Releases). */

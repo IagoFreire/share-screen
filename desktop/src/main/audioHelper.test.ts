@@ -3,10 +3,29 @@ import {
   AUDIO_BLOCK_BYTES,
   createBlockSplitter,
   createLineSplitter,
+  disableCommand,
   isExeName,
   parseAudioApps,
   parseHelperStatus,
 } from "./audioHelper.js";
+
+describe("disableCommand", () => {
+  it("is one stdin line naming every app an admin took out", () => {
+    expect(disableCommand(["Spotify.exe", "chrome.exe"])).toBe("disable Spotify.exe,chrome.exe\n");
+  });
+
+  it("with no apps, puts every app back", () => {
+    expect(disableCommand([])).toBe("disable\n");
+  });
+});
+
+describe("parseHelperStatus (disabled)", () => {
+  it("passes on apps an admin took out", () => {
+    expect(parseHelperStatus('status {"apps":[{"exe":"Spotify.exe","state":"disabled"}]}')).toEqual({
+      apps: [{ exe: "Spotify.exe", state: "disabled" }],
+    });
+  });
+});
 
 describe("parseHelperStatus", () => {
   it("reads the helper's status line", () => {

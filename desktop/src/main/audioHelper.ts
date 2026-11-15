@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import type { AppAudioState, AppAudioStatus, AudioApp } from "@screenshare-bot/shared";
 
-const APP_AUDIO_STATES: readonly AppAudioState[] = ["ok", "covered", "quiet", "muted", "silent", "failed"];
+const APP_AUDIO_STATES: readonly AppAudioState[] = ["ok", "covered", "quiet", "muted", "silent", "failed", "disabled"];
 /** Bound on what one status line may carry to the page. */
 const MAX_STATUS_APPS = 32;
 
@@ -108,7 +108,17 @@ export function listAudioApps(helperPath: string, ownPid: number): Promise<Audio
   });
 }
 
+/**
+ * The stdin line that replaces which apps an admin took out of the running mix (the
+ * helper's parse_disable_command). Names must already pass isExeName: no commas or breaks.
+ */
+export function disableCommand(exes: readonly string[]): string {
+  return exes.length > 0 ? `disable ${exes.join(",")}\n` : "disable\n";
+}
+
 export interface AppAudioCapture {
+  /** Replaces the apps an admin took out of the mix; lands on the helper's next scan. */
+  setDisabled(exes: readonly string[]): void;
   stop(): void;
 }
 
@@ -144,7 +154,13 @@ export function startAppAudio(
     if (!stopped) onEnded();
   });
 
+  // A helper that already exited makes stdin error (EPIPE); onEnded reports that.
+  child.stdin.on("error", () => {});
+
   return {
+    setDisabled(exes) {
+      if (!stopped && child.stdin.writable) child.stdin.write(disableCommand(exes));
+    },
     stop() {
       stopped = true;
       // Closing stdin is the helper's cue to exit; kill() covers a helper that hung.

@@ -10,13 +10,14 @@
 //!       One JSON line on stdout: [{"pid":1234,"exe":"chrome.exe","peak":0.42}, ...]
 //!   audio-helper capture [--exclude a.exe,b.exe] [--exclude-pid PID]
 //!       Raw 48 kHz stereo f32 little-endian PCM on stdout, in 10 ms blocks, until stdin
-//!       closes (the app quit or ended the live).
+//!       closes (the app quit or ended the live). A `disable a.exe,b.exe` line on stdin
+//!       replaces the apps an admin took out of the live; they're reported as "disabled".
 
 mod drift;
 mod policy;
 
 use std::collections::{HashMap, VecDeque};
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -29,7 +30,10 @@ use wasapi::{
 };
 
 use drift::DriftResampler;
-use policy::{ExclusionPolicy, ProcessInfo, RootHealth, capture_roots, clamp_all, json_escape, mix_into, roots_to_demote};
+use policy::{
+    ExclusionPolicy, ProcessInfo, RootHealth, capture_roots, clamp_all, is_disabled, json_escape, mix_into,
+    parse_disable_command, roots_to_demote,
+};
 
 const SAMPLE_RATE: usize = 48_000;
 const CHANNELS: usize = 2;
@@ -285,34 +289,42 @@ struct Health {
 
 /// One app's state in the status line, best first when several processes share a name.
 fn state_rank(state: &str) -> usize {
-    ["ok", "covered", "quiet", "muted", "silent", "failed"].iter().position(|s| *s == state).unwrap_or(9)
+    ["disabled", "ok", "covered", "quiet", "muted", "silent", "failed"]
+        .iter()
+        .position(|s| *s == state)
+        .unwrap_or(9)
 }
 
 /// Prints `status {"apps":[{"exe":..,"state":..}]}` to stderr when it changed; the app
 /// forwards it to admins (see desktop/src/main/audioHelper.ts). States: "ok" captured and
 /// sounding, "covered" heard through a parent's capture, "quiet" captured while silent,
-/// "muted" playing but its capture silent, "silent"/"failed" dropped as a root.
+/// "muted" playing but its capture silent, "silent"/"failed" dropped as a root,
+/// "disabled" taken out of the live by an admin (`disabled` lists those sessions).
 fn report_status(
     system: &System,
     candidates: &[(u32, Vec<u32>)],
+    disabled: &[u32],
     roots: &[u32],
     sources: &HashMap<u32, Arc<Capture>>,
     health: &mut Health,
     now: Instant,
 ) {
     let mut best: HashMap<String, (String, &'static str)> = HashMap::new();
-    for (pid, _) in candidates {
-        let exe = exe_name(system, *pid);
+    let entries = disabled.iter().map(|pid| (*pid, true)).chain(candidates.iter().map(|(pid, _)| (*pid, false)));
+    for (pid, is_off) in entries {
+        let exe = exe_name(system, pid);
         if exe.is_empty() {
             continue;
         }
-        let state = if let Some(reason) = health.dropped.get(pid) {
+        let state = if is_off {
+            "disabled"
+        } else if let Some(reason) = health.dropped.get(&pid) {
             *reason
-        } else if !roots.contains(pid) {
+        } else if !roots.contains(&pid) {
             "covered"
-        } else if sources.get(pid).and_then(|source| source.last_audible()).is_some_and(|at| now - at < RECENT_SOUND) {
+        } else if sources.get(&pid).and_then(|source| source.last_audible()).is_some_and(|at| now - at < RECENT_SOUND) {
             "ok"
-        } else if health.playing_since.get(pid).is_some_and(|since| now - *since >= PLAYING_FOR) {
+        } else if health.playing_since.get(&pid).is_some_and(|since| now - *since >= PLAYING_FOR) {
             "muted"
         } else {
             "quiet"
@@ -338,7 +350,13 @@ fn report_status(
 
 /// Opens captures for newly playing apps and closes the ones that went away or that
 /// a parent capture now covers.
-fn rescan(sources: &mut HashMap<u32, Arc<Capture>>, policy: &ExclusionPolicy, system: &mut System, health: &mut Health) -> Res<()> {
+fn rescan(
+    sources: &mut HashMap<u32, Arc<Capture>>,
+    policy: &ExclusionPolicy,
+    disabled: &[String],
+    system: &mut System,
+    health: &mut Health,
+) -> Res<()> {
     // Names and parents only. The default refresh also reads every process's CPU, memory,
     // disk and path, which took 1.8-6 s with every core busy (a game running) -- and while
     // this ran on the mixer's thread, the live's sound stopped for that long.
@@ -417,7 +435,13 @@ fn rescan(sources: &mut HashMap<u32, Arc<Capture>>, policy: &ExclusionPolicy, sy
             start_source(*pid)
         });
     }
-    report_status(system, &candidates, &roots, sources, health, now);
+    // Already out of `candidates` (the policy excludes them); listed so admins see them.
+    let disabled_pids: Vec<u32> = sessions
+        .iter()
+        .map(|session| session.pid)
+        .filter(|pid| *pid != 0 && is_disabled(disabled, &exe_name(system, *pid)))
+        .collect();
+    report_status(system, &candidates, &disabled_pids, &roots, sources, health, now);
     Ok(())
 }
 
@@ -461,7 +485,7 @@ fn apply_roster(inputs: &mut HashMap<u32, MixInput>, roster: Roster) {
 /// Finds the apps to capture, once a second, on a thread of its own: scanning processes
 /// and audio sessions can take a long while on a busy PC, and the mixer must never wait
 /// for it -- every 10 ms block it holds back is a gap in the live's sound.
-fn scan_loop(policy: ExclusionPolicy, rosters: mpsc::Sender<Roster>) {
+fn scan_loop(policy: ExclusionPolicy, disabled: Arc<Mutex<Vec<String>>>, rosters: mpsc::Sender<Roster>) {
     if let Err(error) = initialize_mta().ok() {
         eprintln!("session scanner failed to start: {error}");
         return;
@@ -470,7 +494,10 @@ fn scan_loop(policy: ExclusionPolicy, rosters: mpsc::Sender<Roster>) {
     let mut sources: HashMap<u32, Arc<Capture>> = HashMap::new();
     let mut health = Health::default();
     loop {
-        if let Err(error) = rescan(&mut sources, &policy, &mut system, &mut health) {
+        // An admin's change lands on the next scan (within RESCAN_INTERVAL).
+        let current = disabled.lock().map(|list| list.clone()).unwrap_or_default();
+        let effective = policy.with_disabled(&current);
+        if let Err(error) = rescan(&mut sources, &effective, &current, &mut system, &mut health) {
             eprintln!("session scan failed: {error}");
         }
         let roster = sources.iter().map(|(pid, capture)| (*pid, Arc::clone(capture))).collect();
@@ -482,17 +509,25 @@ fn scan_loop(policy: ExclusionPolicy, rosters: mpsc::Sender<Roster>) {
 }
 
 fn run_capture(args: &Args) -> Res<()> {
-    // The app closes our stdin when it stops the live or quits; nothing else should
-    // keep this process alive and capturing.
-    thread::spawn(|| {
-        let mut sink = [0u8; 64];
-        while matches!(io::stdin().read(&mut sink), Ok(n) if n > 0) {}
+    // stdin carries the admin's `disable` lines; the app closes it when it stops the live
+    // or quits, and nothing else should keep this process alive and capturing.
+    let disabled: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let commands = Arc::clone(&disabled);
+    thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            if let Some(list) = parse_disable_command(&line) {
+                if let Ok(mut current) = commands.lock() {
+                    *current = list;
+                }
+            }
+        }
         std::process::exit(0);
     });
 
     let policy = ExclusionPolicy::new(&args.exclude, args.exclude_pid);
     let (roster_sender, rosters) = mpsc::channel();
-    thread::spawn(move || scan_loop(policy, roster_sender));
+    thread::spawn(move || scan_loop(policy, disabled, roster_sender));
 
     let mut inputs: HashMap<u32, MixInput> = HashMap::new();
     let mut stdout = io::stdout().lock();

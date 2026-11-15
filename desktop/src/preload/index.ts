@@ -59,6 +59,7 @@ const api: DesktopApi = {
       if (!result.ok) throw new Error(result.message);
     },
     stop: () => ipcRenderer.send("desktop:audio-stop"),
+    setDisabled: (exes) => ipcRenderer.send("desktop:audio-disable", exes),
     onBlock: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, data: Uint8Array) => {
         // Copied into a fresh buffer: the IPC payload's byteOffset needn't be 4-aligned.

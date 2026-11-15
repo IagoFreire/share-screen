@@ -1242,6 +1242,84 @@ body.viewer .status {
   color: #f2f3f5;
 }
 
+/* --- Admin per-app sound: take an app out of a desktop live (see ui/appAudioControl.ts) --- */
+.app-audio-pop {
+  width: 260px;
+}
+
+.app-audio-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.app-audio-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 8px;
+  border-radius: 4px;
+  background: #2b2d31;
+}
+
+.app-audio-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: #f2f3f5;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Out of the live: struck through, so the list reads as "what everyone hears". */
+.app-audio-row.is-off .app-audio-name {
+  color: #949ba4;
+  text-decoration: line-through;
+}
+
+.app-audio-toggle {
+  min-width: 68px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: #404249;
+  color: #f2f3f5;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.app-audio-toggle:hover:not(:disabled) {
+  background: #da373c;
+}
+
+.app-audio-row.is-off .app-audio-toggle:hover:not(:disabled) {
+  background: #248046;
+}
+
+.app-audio-toggle:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.app-audio-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.app-audio-empty {
+  color: #949ba4;
+  font-size: 12px;
+}
+
 /* --- Quality picker (simulcast broadcasts from the desktop app) --- */
 .quality-menu {
   position: relative;
