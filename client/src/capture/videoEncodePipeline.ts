@@ -35,15 +35,10 @@ const REQUESTED_KEYFRAME_MIN_SPACING_MS = 500;
 const SOFTWARE_FALLBACK_AFTER_FAILURES = 2;
 /** Wait this long before rebuilding a failed encoder, so a broken driver can't spin. */
 const ENCODER_RETRY_DELAY_MS = 500;
-/**
- * A keyframe that is due while the capture has sent nothing for this long is encoded
- * from the last captured frame instead. Screen capture only delivers a frame when the
- * picture changes -- a still screen, or a fullscreen game the capture stops seeing --
- * and the keyframe a joining viewer needs would otherwise wait for the next change.
- */
-const STALLED_CAPTURE_MS = 200;
-/** How often a stalled capture is checked for a keyframe that is due. */
-const STALL_CHECK_EVERY_MS = 100;
+// No captured frame is ever kept past its encode: they come from the capture's small
+// buffer pool, and holding even one (a copy of the last picture, to re-encode as a
+// keyframe while the screen is still) starved it under a fullscreen game -- the capture
+// stopped delivering and the live froze for everyone while the sound played on.
 
 export interface VideoEncodePipeline {
   /** Asks for a keyframe soon (e.g. a new viewer joined); see REQUESTED_KEYFRAME_MIN_SPACING_MS. */
@@ -161,11 +156,6 @@ export async function startVideoEncodePipeline(
   let mustKeyframe = true;
   /** Someone outside asked for one; honoured within REQUESTED_KEYFRAME_MIN_SPACING_MS. */
   let keyframeRequested = false;
-  /** The newest captured frame, kept to repeat as a keyframe while the capture is stalled. */
-  let lastFrame: VideoFrame | null = null;
-  let lastFrameAt = 0;
-  /** The encode under way (from the capture or a repeat): the two never overlap. */
-  let inFlight: Promise<void> | null = null;
 
   function keyframeDue(now: number): boolean {
     return (
@@ -206,54 +196,18 @@ export async function startVideoEncodePipeline(
     encoder.encode(frame, { keyFrame });
   }
 
-  /** Runs one encode at a time; a failure rebuilds the encoder on the next frame. */
-  function encodeExclusively(frame: VideoFrame): Promise<void> {
-    const run = (async () => {
-      try {
-        await encodeFrame(frame);
-      } catch (error) {
-        console.error("Video encode failed; rebuilding the encoder:", error);
-        noteFailure();
-        if (encoder.state !== "closed") encoder.close();
-      }
-    })();
-    const tracked: Promise<void> = run.finally(() => {
-      if (inFlight === tracked) inFlight = null;
-    });
-    inFlight = tracked;
-    return run;
-  }
-
-  function rememberFrame(frame: VideoFrame): void {
-    lastFrame?.close();
-    lastFrame = frame.clone();
-    lastFrameAt = performance.now();
-  }
-
-  /** A keyframe is due but the capture went quiet: encode the last picture again. */
-  function repeatIfStalled(): void {
-    if (stopped || paused || inFlight || !lastFrame) return;
-    const now = performance.now();
-    if (now - lastFrameAt < STALLED_CAPTURE_MS || !keyframeDue(now)) return;
-    // Stamped as if captured now, on the capture's own clock, so the viewer's A/V sync
-    // treats it as current rather than as a stale frame from before the stall.
-    const repeat = new VideoFrame(lastFrame, {
-      timestamp: lastFrame.timestamp + Math.round((now - lastFrameAt) * 1000),
-    });
-    void encodeExclusively(repeat).finally(() => repeat.close());
-  }
-  const stallTimer = setInterval(repeatIfStalled, STALL_CHECK_EVERY_MS);
-
   const pump = (async () => {
     while (!stopped) {
       const { done, value: frame } = await reader.read();
       if (done || !frame) break;
 
       try {
-        rememberFrame(frame);
-        if (inFlight) await inFlight;
         // Still read while paused, so the capture doesn't back up; just never encoded.
-        if (!paused && !stopped) await encodeExclusively(frame);
+        if (!paused) await encodeFrame(frame);
+      } catch (error) {
+        console.error("Video encode failed; rebuilding the encoder:", error);
+        noteFailure();
+        if (encoder.state !== "closed") encoder.close();
       } finally {
         frame.close();
       }
@@ -275,9 +229,6 @@ export async function startVideoEncodePipeline(
     },
     stop: () => {
       stopped = true;
-      clearInterval(stallTimer);
-      lastFrame?.close();
-      lastFrame = null;
       reader.cancel().catch(() => undefined);
       if (encoder.state !== "closed") encoder.close();
     },

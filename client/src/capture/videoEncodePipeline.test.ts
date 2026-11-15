@@ -119,25 +119,24 @@ describe("startVideoEncodePipeline", () => {
     pipeline.stop();
   });
 
-  it("repeats the last picture as a keyframe when one is asked for while the capture is still", async () => {
+  it("lets go of every captured frame once it is encoded, so the capture never runs dry", async () => {
     const capture = fakeCapture();
+    const cloneSpy = vi.spyOn(FakeFrame.prototype, "clone");
     const pipeline = await startVideoEncodePipeline(track, () => undefined, { quality });
-    capture.push(new FakeFrame(1920, 1080, 1_000_000));
-    await settle();
-    await advance(1000); // past the requested-keyframe spacing; the screen hasn't changed since
+    const frames = [0, 16_000, 33_000].map((timestamp) => new FakeFrame(1920, 1080, timestamp));
 
-    pipeline.requestKeyframe();
-    await advance(200);
+    for (const frame of frames) {
+      capture.push(frame);
+      await settle();
+    }
 
-    const encoded = FakeEncoder.last!.encoded;
-    expect(encoded).toHaveLength(2);
-    expect(encoded[1]!.keyFrame).toBe(true);
-    // Stamped on the capture's clock as if captured now, not as the stale original.
-    expect(encoded[1]!.timestamp).toBeGreaterThan(1_000_000 + 1_000_000);
+    // Holding even one (a copy of the last picture) froze the live under a fullscreen game.
+    expect(frames.every((frame) => frame.closed)).toBe(true);
+    expect(cloneSpy).not.toHaveBeenCalled();
     pipeline.stop();
   });
 
-  it("leaves a moving capture alone: the next real frame carries the keyframe", async () => {
+  it("puts the keyframe a viewer asks for on the next captured frame", async () => {
     const capture = fakeCapture();
     const pipeline = await startVideoEncodePipeline(track, () => undefined, { quality });
     capture.push(new FakeFrame(1920, 1080, 0));
@@ -148,26 +147,9 @@ describe("startVideoEncodePipeline", () => {
     now += 16;
     capture.push(new FakeFrame(1920, 1080, 1_016_000));
     await settle();
-    await advance(100);
 
     const encoded = FakeEncoder.last!.encoded;
-    expect(encoded.map((chunk) => chunk.timestamp)).toEqual([0, 1_016_000]);
-    expect(encoded[1]!.keyFrame).toBe(true);
-    pipeline.stop();
-  });
-
-  it("repeats nothing while paused or once no keyframe is due", async () => {
-    const capture = fakeCapture();
-    const pipeline = await startVideoEncodePipeline(track, () => undefined, { quality });
-    capture.push(new FakeFrame(1920, 1080, 0));
-    await settle();
-
-    await advance(2000); // still, but the start keyframe already went out
-    pipeline.setPaused(true);
-    pipeline.requestKeyframe();
-    await advance(1000);
-
-    expect(FakeEncoder.last!.encoded).toHaveLength(1);
+    expect(encoded.map((chunk) => chunk.keyFrame)).toEqual([true, true]);
     pipeline.stop();
   });
 });
