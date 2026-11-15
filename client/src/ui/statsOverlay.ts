@@ -57,13 +57,24 @@ export function formatPlaybackStats({ audio, video, receiver, layer, autoLayer, 
       `(${Math.round(video.decodeLagMs)} ms) · sobrecargas ${video.overloads} · alcances ${video.catchUps}` +
       (video.waitingForKeyframe ? " · aguardando keyframe" : "")
     : "Vídeo: sem vídeo";
+  const decoderLine = video
+    ? `Decoder: ${video.resolution ? `${video.resolution.width}×${video.resolution.height}` : "sem imagem ainda"} · ` +
+      `${video.decoderMode === "software" ? "software (o da placa falhou)" : "automático"} · erros ${video.decoderErrors}`
+    : null;
   const delay = receiver.queueDelayMs === null ? "—" : `${Math.round(receiver.queueDelayMs)} ms`;
   const networkLine =
     `Rede: atraso de fila ${delay} · quadros perdidos ${receiver.gaps} · ` +
     `avisos de congestionamento ${receiver.congestionReports}`;
   const qualityLine =
     layer === null ? "Qualidade: versão única" : `Qualidade: camada ${layer}${autoLayer ? " (automático)" : ""}`;
-  return [audioLine, videoLine, networkLine, qualityLine, ...(capture ? [captureLine(capture)] : [])];
+  return [
+    audioLine,
+    videoLine,
+    ...(decoderLine ? [decoderLine] : []),
+    networkLine,
+    qualityLine,
+    ...(capture ? [captureLine(capture)] : []),
+  ];
 }
 
 export function isStatsShortcut(event: KeyboardEvent): boolean {

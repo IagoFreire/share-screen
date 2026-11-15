@@ -4,7 +4,9 @@ import {
   KEYFRAME_INTERVAL_MS,
   TARGET_VIDEO_BITRATE_KBPS_DEFAULT,
   VIDEO_FRAMERATE_DEFAULT,
+  VIDEO_HEIGHT_DEFAULT,
 } from "@screenshare-bot/shared";
+import { encodeSizeFor } from "./encodeSize.js";
 import { encoderAttempts, VIDEO_CODEC_HIGH } from "./encoderChoice.js";
 
 // H.264 High profile, Level 5.1 -- supports 1080p60. Chosen over VP9/AV1 for the widest
@@ -33,6 +35,15 @@ const REQUESTED_KEYFRAME_MIN_SPACING_MS = 500;
 const SOFTWARE_FALLBACK_AFTER_FAILURES = 2;
 /** Wait this long before rebuilding a failed encoder, so a broken driver can't spin. */
 const ENCODER_RETRY_DELAY_MS = 500;
+/**
+ * A keyframe that is due while the capture has sent nothing for this long is encoded
+ * from the last captured frame instead. Screen capture only delivers a frame when the
+ * picture changes -- a still screen, or a fullscreen game the capture stops seeing --
+ * and the keyframe a joining viewer needs would otherwise wait for the next change.
+ */
+const STALLED_CAPTURE_MS = 200;
+/** How often a stalled capture is checked for a keyframe that is due. */
+const STALL_CHECK_EVERY_MS = 100;
 
 export interface VideoEncodePipeline {
   /** Asks for a keyframe soon (e.g. a new viewer joined); see REQUESTED_KEYFRAME_MIN_SPACING_MS. */
@@ -63,6 +74,8 @@ export async function startVideoEncodePipeline(
   options: VideoEncodePipelineOptions = {},
 ): Promise<VideoEncodePipeline> {
   const targetBitrate = (options.quality?.bitrateKbps ?? TARGET_VIDEO_BITRATE_KBPS_DEFAULT) * 1000;
+  const framerate = options.quality?.framerate ?? VIDEO_FRAMERATE_DEFAULT;
+  const maxHeight = options.quality?.height ?? VIDEO_HEIGHT_DEFAULT;
   let bitrateScale = 1;
   let failures = 0;
   let retryAt = 0;
@@ -83,33 +96,31 @@ export async function startVideoEncodePipeline(
   }
   let encoder = createEncoder();
 
-  // H.264 requires even dimensions.
-  const toEven = (value: number) => Math.max(2, Math.round(value / 2) * 2);
-  let configuredWidth = 0;
-  let configuredHeight = 0;
+  /** Size of the frames the encoder was set up for (the source, not the encoded size). */
+  let sourceWidth = 0;
+  let sourceHeight = 0;
   let configuredBitrate = 0;
 
   /**
-   * The encoder must be configured to the exact size of the frames being fed to it:
-   * anything else gets scaled to the configured size, which stretches the picture when
-   * the aspect ratios differ (very visible when sharing a browser window, which is
-   * rarely 16:9). Sizes therefore come from the frames themselves rather than the
-   * requested preset, and a shared window that gets resized mid-broadcast triggers a
-   * reconfigure instead of silently distorting from then on.
+   * The encoder is set up for the frames being fed to it: sizes come from the frames
+   * themselves rather than the requested preset (a shared window is rarely 16:9), and a
+   * window resized mid-broadcast triggers a reconfigure. A source larger than the chosen
+   * quality -- a game going fullscreen at the monitor's native size -- is encoded smaller
+   * (encodeSize.ts) with the same aspect ratio, and WebCodecs scales each frame down.
    */
-  /** The first encoder setup (see encoderAttempts) this browser supports for these settings. */
   async function supportedConfig(width: number, height: number, bitrate: number): Promise<VideoEncoderConfig> {
     const attempts = encoderAttempts({
       lowPower: options.quality?.lowPower === true,
       softwareOnly: failures >= SOFTWARE_FALLBACK_AFTER_FAILURES,
     });
+    const size = encodeSizeFor(width, height, maxHeight, framerate);
     const tried: VideoEncoderConfig[] = [];
     for (const attempt of attempts) {
       const encoderConfig: VideoEncoderConfig = {
         ...attempt,
-        width: toEven(width),
-        height: toEven(height),
-        framerate: options.quality?.framerate ?? VIDEO_FRAMERATE_DEFAULT,
+        width: size.width,
+        height: size.height,
+        framerate,
         bitrate,
         bitrateMode: "variable",
         latencyMode: "realtime",
@@ -131,8 +142,8 @@ export async function startVideoEncodePipeline(
   async function configureFor(width: number, height: number, bitrate: number): Promise<void> {
     const encoderConfig = await supportedConfig(width, height, bitrate);
     encoder.configure(encoderConfig);
-    configuredWidth = encoderConfig.width;
-    configuredHeight = encoderConfig.height;
+    sourceWidth = width;
+    sourceHeight = height;
     configuredBitrate = bitrate;
   }
 
@@ -150,18 +161,31 @@ export async function startVideoEncodePipeline(
   let mustKeyframe = true;
   /** Someone outside asked for one; honoured within REQUESTED_KEYFRAME_MIN_SPACING_MS. */
   let keyframeRequested = false;
+  /** The newest captured frame, kept to repeat as a keyframe while the capture is stalled. */
+  let lastFrame: VideoFrame | null = null;
+  let lastFrameAt = 0;
+  /** The encode under way (from the capture or a repeat): the two never overlap. */
+  let inFlight: Promise<void> | null = null;
+
+  function keyframeDue(now: number): boolean {
+    return (
+      mustKeyframe ||
+      (keyframeRequested && now - lastKeyframeAt >= REQUESTED_KEYFRAME_MIN_SPACING_MS) ||
+      now - lastKeyframeAt > KEYFRAME_INTERVAL_MS
+    );
+  }
 
   async function encodeFrame(frame: VideoFrame): Promise<void> {
     if (encoder.state === "closed") {
       if (performance.now() < retryAt) return;
       encoder = createEncoder();
-      configuredWidth = 0;
-      configuredHeight = 0;
+      sourceWidth = 0;
+      sourceHeight = 0;
     }
 
     // First frame, the source changed size (e.g. the shared window was resized), or the
     // upload asked for another bitrate.
-    const sizeChanged = frame.displayWidth !== configuredWidth || frame.displayHeight !== configuredHeight;
+    const sizeChanged = frame.displayWidth !== sourceWidth || frame.displayHeight !== sourceHeight;
     const bitrate = Math.round(targetBitrate * bitrateScale);
     if (sizeChanged || bitrate !== configuredBitrate) {
       await configureFor(frame.displayWidth, frame.displayHeight, bitrate);
@@ -172,10 +196,7 @@ export async function startVideoEncodePipeline(
     if (encoder.encodeQueueSize > ENCODER_QUEUE_DROP_THRESHOLD) return;
 
     const now = performance.now();
-    const keyFrame =
-      mustKeyframe ||
-      (keyframeRequested && now - lastKeyframeAt >= REQUESTED_KEYFRAME_MIN_SPACING_MS) ||
-      now - lastKeyframeAt > KEYFRAME_INTERVAL_MS;
+    const keyFrame = keyframeDue(now);
     if (keyFrame) {
       lastKeyframeAt = now;
       mustKeyframe = false;
@@ -185,18 +206,54 @@ export async function startVideoEncodePipeline(
     encoder.encode(frame, { keyFrame });
   }
 
+  /** Runs one encode at a time; a failure rebuilds the encoder on the next frame. */
+  function encodeExclusively(frame: VideoFrame): Promise<void> {
+    const run = (async () => {
+      try {
+        await encodeFrame(frame);
+      } catch (error) {
+        console.error("Video encode failed; rebuilding the encoder:", error);
+        noteFailure();
+        if (encoder.state !== "closed") encoder.close();
+      }
+    })();
+    const tracked: Promise<void> = run.finally(() => {
+      if (inFlight === tracked) inFlight = null;
+    });
+    inFlight = tracked;
+    return run;
+  }
+
+  function rememberFrame(frame: VideoFrame): void {
+    lastFrame?.close();
+    lastFrame = frame.clone();
+    lastFrameAt = performance.now();
+  }
+
+  /** A keyframe is due but the capture went quiet: encode the last picture again. */
+  function repeatIfStalled(): void {
+    if (stopped || paused || inFlight || !lastFrame) return;
+    const now = performance.now();
+    if (now - lastFrameAt < STALLED_CAPTURE_MS || !keyframeDue(now)) return;
+    // Stamped as if captured now, on the capture's own clock, so the viewer's A/V sync
+    // treats it as current rather than as a stale frame from before the stall.
+    const repeat = new VideoFrame(lastFrame, {
+      timestamp: lastFrame.timestamp + Math.round((now - lastFrameAt) * 1000),
+    });
+    void encodeExclusively(repeat).finally(() => repeat.close());
+  }
+  const stallTimer = setInterval(repeatIfStalled, STALL_CHECK_EVERY_MS);
+
   const pump = (async () => {
     while (!stopped) {
       const { done, value: frame } = await reader.read();
       if (done || !frame) break;
 
       try {
+        rememberFrame(frame);
+        if (inFlight) await inFlight;
         // Still read while paused, so the capture doesn't back up; just never encoded.
-        if (!paused) await encodeFrame(frame);
-      } catch (error) {
-        console.error("Video encode failed; rebuilding the encoder:", error);
-        noteFailure();
-        if (encoder.state !== "closed") encoder.close();
+        if (!paused && !stopped) await encodeExclusively(frame);
       } finally {
         frame.close();
       }
@@ -218,6 +275,9 @@ export async function startVideoEncodePipeline(
     },
     stop: () => {
       stopped = true;
+      clearInterval(stallTimer);
+      lastFrame?.close();
+      lastFrame = null;
       reader.cancel().catch(() => undefined);
       if (encoder.state !== "closed") encoder.close();
     },

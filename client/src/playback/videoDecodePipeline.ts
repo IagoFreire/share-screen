@@ -33,6 +33,12 @@ export interface VideoPlaybackStats {
   /** Times the decoder fell so far behind that its backlog was thrown away. */
   overloads: number;
   waitingForKeyframe: boolean;
+  /** Size of the last decoded picture; null before the first one. */
+  resolution: { width: number; height: number } | null;
+  /** "software" once repeated failures moved off the default (usually hardware) decoder. */
+  decoderMode: "auto" | "software";
+  /** Times the decoder failed and was rebuilt. */
+  decoderErrors: number;
 }
 
 export interface VideoDecodePipeline {
@@ -129,6 +135,14 @@ const DEFAULT_REFRESH_MS = 1000 / 60;
  * relay only sends deltas after one -- so another is asked for at most this often.
  */
 const MISSED_KEYFRAME_ASK_EVERY_MS = 1000;
+/**
+ * Decoder failures in a row, with no picture coming out in between, before giving up on
+ * the default decoder for the software one. Some GPUs' hardware decoders refuse certain
+ * streams outright (a size or level past what they support): rebuilt with the same setup
+ * they fail on every keyframe, and the viewer waits on "Carregando a live…" forever while
+ * everyone with another GPU watches fine.
+ */
+const SOFTWARE_FALLBACK_AFTER_FAILURES = 2;
 
 export async function startVideoDecodePipeline(
   canvas: HTMLCanvasElement,
@@ -143,6 +157,13 @@ export async function startVideoDecodePipeline(
   if (!support.supported) {
     throw new Error(`VideoDecoder config not supported by this browser: ${JSON.stringify(decoderConfig)}`);
   }
+  const softwareConfig: VideoDecoderConfig = { ...decoderConfig, hardwareAcceleration: "prefer-software" };
+  const canUseSoftware = (await VideoDecoder.isConfigSupported(softwareConfig)).supported === true;
+  let useSoftware = false;
+  /** Decoder failures since the last picture came out (see SOFTWARE_FALLBACK_AFTER_FAILURES). */
+  let failuresWithoutPicture = 0;
+  let decoderErrors = 0;
+  let resolution: { width: number; height: number } | null = null;
 
   const queue: QueuedFrame[] = [];
   /** Encoded chunks not handed to the decoder yet, oldest first. */
@@ -288,6 +309,8 @@ export async function startVideoDecodePipeline(
       frame.close();
       return;
     }
+    failuresWithoutPicture = 0;
+    resolution = { width: frame.displayWidth, height: frame.displayHeight };
     // This chunk is out, and so is everything handed in before it.
     for (const timestampUs of pending.keys()) {
       if (timestampUs > frame.timestamp) break;
@@ -373,13 +396,23 @@ export async function startVideoDecodePipeline(
       output: onFrame,
       error: (error) => {
         console.error("VideoDecoder error:", error);
+        noteDecoderFailure();
         // Mid-stream resolution changes (the presenter resizing a shared window) and
         // hardware hiccups both land here; the next chunk gets a fresh decoder.
         needKeyframe();
       },
     });
-    created.configure(decoderConfig);
+    created.configure(useSoftware ? softwareConfig : decoderConfig);
     return created;
+  }
+
+  /** A failure with nothing decoded since the last one: past a few, try the software decoder. */
+  function noteDecoderFailure(): void {
+    decoderErrors += 1;
+    failuresWithoutPicture += 1;
+    if (useSoftware || !canUseSoftware || failuresWithoutPicture < SOFTWARE_FALLBACK_AFTER_FAILURES) return;
+    useSoftware = true;
+    console.warn("VideoDecoder keeps failing with no picture; switching to the software decoder.");
   }
   let decoder = createDecoder();
 
@@ -475,6 +508,9 @@ export async function startVideoDecodePipeline(
       overloads,
       catchUps,
       waitingForKeyframe: waitingForKeyframe || decoderNeedsKey,
+      resolution,
+      decoderMode: useSoftware ? "software" : "auto",
+      decoderErrors,
     }),
     resyncToLive: () => {
       // Everything buffered is behind live, so the newest of it marks the cutoff: any

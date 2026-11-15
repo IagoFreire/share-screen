@@ -18,6 +18,9 @@ describe("stats overlay", () => {
         catchUps: 2,
         overloads: 0,
         waitingForKeyframe: false,
+        resolution: { width: 1920, height: 1080 },
+        decoderMode: "auto",
+        decoderErrors: 0,
       },
       receiver,
       layer: 1,
@@ -27,6 +30,7 @@ describe("stats overlay", () => {
     expect(lines).toEqual([
       "Áudio: nível -12 dB · folga 302 ms · velocidade 1,0015× · falhas 2 · saltos ao vivo 1",
       "Vídeo: 58 fps na tela (60 recebidos) · fila 5 + 20 no buffer · descartados 9 · no decoder 1 (33 ms) · sobrecargas 0 · alcances 2",
+      "Decoder: 1920×1080 · automático · erros 0",
       "Rede: atraso de fila 12 ms · quadros perdidos 1 · avisos de congestionamento 0",
       "Qualidade: camada 1 (automático)",
     ]);
@@ -39,16 +43,31 @@ describe("stats overlay", () => {
     expect(lines[3]).toBe("Qualidade: versão única");
   });
 
-  it("flags a picture waiting for a keyframe", () => {
-    const [, video] = formatPlaybackStats({
+  it("flags a picture waiting for a keyframe, and a decoder that fell back to software", () => {
+    const [, video, decoder] = formatPlaybackStats({
       audio: null,
-      video: { shownFps: 0, receivedFps: 0, droppedFrames: 0, queuedFrames: 0, bufferedChunks: 0, decodeQueue: 0, decodeLagMs: 0, overloads: 0, catchUps: 0, waitingForKeyframe: true },
+      video: {
+        shownFps: 0,
+        receivedFps: 0,
+        droppedFrames: 0,
+        queuedFrames: 0,
+        bufferedChunks: 0,
+        decodeQueue: 0,
+        decodeLagMs: 0,
+        overloads: 0,
+        catchUps: 0,
+        waitingForKeyframe: true,
+        resolution: null,
+        decoderMode: "software",
+        decoderErrors: 3,
+      },
       receiver,
       layer: 0,
       autoLayer: false,
     });
 
     expect(video).toBe("Vídeo: 0 fps na tela (0 recebidos) · fila 0 + 0 no buffer · descartados 0 · no decoder 0 (0 ms) · sobrecargas 0 · alcances 0 · aguardando keyframe");
+    expect(decoder).toBe("Decoder: sem imagem ainda · software (o da placa falhou) · erros 3");
   });
 
   it("calls a silent stream silence, including the decoder's near-zero noise", () => {

@@ -5,7 +5,7 @@ import { startVideoDecodePipeline } from "./videoDecodePipeline.js";
 class FakeDecoder {
   static last: FakeDecoder | null = null;
   static created = 0;
-  static isConfigSupported = async () => ({ supported: true });
+  static isConfigSupported = async (_config?: { hardwareAcceleration?: string }) => ({ supported: true });
   state = "unconfigured";
   decodeQueueSize = 0;
   decoded: Array<{ type: string; timestamp: number }> = [];
@@ -14,7 +14,9 @@ class FakeDecoder {
     FakeDecoder.last = this;
     FakeDecoder.created += 1;
   }
-  configure() {
+  config: { hardwareAcceleration?: string } | null = null;
+  configure(config: { hardwareAcceleration?: string }) {
+    this.config = config;
     this.state = "configured";
   }
   decode(chunk: { type: string; timestamp: number }) {
@@ -154,6 +156,59 @@ describe("startVideoDecodePipeline", () => {
     expect(onKeyframeNeeded).toHaveBeenCalledTimes(1);
     expect(FakeDecoder.created).toBe(2);
     expect(FakeDecoder.last!.decoded.map((chunk) => chunk.type)).toEqual(["key"]);
+  });
+
+  describe("a decoder that fails on every keyframe (a GPU that can't take the stream)", () => {
+    function failKeyframe(pipeline: Awaited<ReturnType<typeof startVideoDecodePipeline>>) {
+      pipeline.decodeChunk(key);
+      const failed = FakeDecoder.last!;
+      failed.state = "closed";
+      failed.init.error(new DOMException("unsupported stream", "EncodingError"));
+    }
+
+    it("moves to the software decoder after repeated failures with no picture", async () => {
+      const pipeline = await startVideoDecodePipeline(fakeCanvas());
+      failKeyframe(pipeline);
+      failKeyframe(pipeline);
+
+      pipeline.decodeChunk(key);
+
+      expect(FakeDecoder.last!.config?.hardwareAcceleration).toBe("prefer-software");
+      expect(pipeline.stats().decoderMode).toBe("software");
+      expect(pipeline.stats().decoderErrors).toBe(2);
+    });
+
+    it("keeps the default decoder when a picture came out between failures", async () => {
+      const pipeline = await startVideoDecodePipeline(fakeCanvas());
+      failKeyframe(pipeline);
+      pipeline.decodeChunk(key);
+      FakeDecoder.last!.init.output(fakeFrame(0));
+      failKeyframe(pipeline);
+
+      pipeline.decodeChunk(key);
+
+      expect(FakeDecoder.last!.config?.hardwareAcceleration).toBeUndefined();
+      expect(pipeline.stats().decoderMode).toBe("auto");
+      expect(pipeline.stats().resolution).toEqual({ width: 1920, height: 1080 });
+    });
+
+    it("stays on the default decoder when this browser has no software one", async () => {
+      vi.stubGlobal(
+        "VideoDecoder",
+        class extends FakeDecoder {
+          static override isConfigSupported = async (config?: { hardwareAcceleration?: string }) => ({
+            supported: config?.hardwareAcceleration !== "prefer-software",
+          });
+        },
+      );
+      const pipeline = await startVideoDecodePipeline(fakeCanvas());
+      failKeyframe(pipeline);
+      failKeyframe(pipeline);
+
+      pipeline.decodeChunk(key);
+
+      expect(pipeline.stats().decoderMode).toBe("auto");
+    });
   });
 
   it("waits for a keyframe when the browser refuses a chunk outright", async () => {
