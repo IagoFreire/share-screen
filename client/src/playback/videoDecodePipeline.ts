@@ -136,6 +136,15 @@ const DEFAULT_REFRESH_MS = 1000 / 60;
  */
 const MISSED_KEYFRAME_ASK_EVERY_MS = 1000;
 /**
+ * While a keyframe is awaited and nothing arrives at all, it is asked for again this often.
+ * The relay sends a viewer waiting for its first keyframe nothing else -- no delta that
+ * would say one went by -- so a keyframe lost anywhere on the way (the presenter's encoder
+ * dropped it; it landed before this pipeline existed) used to be asked for never again,
+ * leaving the viewer on "Carregando a live" with the sound playing.
+ */
+const KEYFRAME_REASK_EVERY_MS = 2000;
+const KEYFRAME_REASK_CHECK_MS = 500;
+/**
  * Decoder failures in a row, with no picture coming out in between, before giving up on
  * the default decoder for the software one. Some GPUs' hardware decoders refuse certain
  * streams outright (a size or level past what they support): rebuilt with the same setup
@@ -453,6 +462,17 @@ export async function startVideoDecodePipeline(
 
   rafHandle = requestAnimationFrame(presentFrames);
 
+  // Whoever starts a pipeline asks for its keyframe right away; this only follows up.
+  const createdAt = performance.now();
+  function reaskIfStillWaiting(): void {
+    if (stopped || !(waitingForKeyframe || decoderNeedsKey)) return;
+    const now = performance.now();
+    if (now - Math.max(createdAt, lastMissedKeyframeAskAt) < KEYFRAME_REASK_EVERY_MS) return;
+    lastMissedKeyframeAskAt = now;
+    onKeyframeNeeded?.();
+  }
+  const reaskTimer = setInterval(reaskIfStillWaiting, KEYFRAME_REASK_CHECK_MS);
+
   return {
     decodeChunk: (chunk) => {
       if (stopped) return;
@@ -538,6 +558,7 @@ export async function startVideoDecodePipeline(
     },
     stop: () => {
       stopped = true;
+      clearInterval(reaskTimer);
       cancelAnimationFrame(rafHandle);
       for (const queued of queue) queued.frame.close();
       queue.length = 0;

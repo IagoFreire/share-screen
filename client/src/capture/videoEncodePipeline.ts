@@ -8,6 +8,8 @@ import {
 } from "@screenshare-bot/shared";
 import { encodeSizeFor } from "./encodeSize.js";
 import { encoderAttempts, VIDEO_CODEC_HIGH } from "./encoderChoice.js";
+import { createKeyframeTracker } from "./keyframeTracker.js";
+import { createStillPicture } from "./stillPicture.js";
 
 // H.264 High profile, Level 5.1 -- supports 1080p60. Chosen over VP9/AV1 for the widest
 // hardware-decode compatibility across whatever Chromium build Discord's desktop client
@@ -36,9 +38,25 @@ const SOFTWARE_FALLBACK_AFTER_FAILURES = 2;
 /** Wait this long before rebuilding a failed encoder, so a broken driver can't spin. */
 const ENCODER_RETRY_DELAY_MS = 500;
 // No captured frame is ever kept past its encode: they come from the capture's small
-// buffer pool, and holding even one (a copy of the last picture, to re-encode as a
-// keyframe while the screen is still) starved it under a fullscreen game -- the capture
-// stopped delivering and the live froze for everyone while the sound played on.
+// buffer pool, and holding even one starved it under a fullscreen game -- the capture
+// stopped delivering and the live froze for everyone while the sound played on. The
+// still-screen keyframe is encoded from a canvas copy instead (stillPicture.ts).
+/**
+ * A keyframe that is due while the capture has sent nothing for this long is encoded
+ * from the still-picture copy. Screen capture only delivers a frame when the picture
+ * changes, so a viewer joining a still screen would otherwise wait for the next change.
+ */
+const STALLED_CAPTURE_MS = 200;
+/** How often a stalled capture is checked for a keyframe that is due. */
+const STALL_CHECK_EVERY_MS = 100;
+/**
+ * An encoder whose queue stays full this long, with nothing coming out, is stuck and is
+ * replaced like a failed one. A full queue is the sign, not silence: rate control may drop
+ * every frame for a while, but a dropped frame still leaves the queue -- replacing such an
+ * encoder would count as a failure and push it toward the software one. A still screen
+ * offers no frames, so it never fills the queue either.
+ */
+const ENCODER_HUNG_MS = 3000;
 
 export interface VideoEncodePipeline {
   /** Asks for a keyframe soon (e.g. a new viewer joined); see REQUESTED_KEYFRAME_MIN_SPACING_MS. */
@@ -80,21 +98,42 @@ export async function startVideoEncodePipeline(
     retryAt = performance.now() + ENCODER_RETRY_DELAY_MS;
   }
 
+  // Keyframes are followed until they come out of the encoder (see keyframeTracker.ts).
+  const keyframes = createKeyframeTracker({
+    intervalMs: KEYFRAME_INTERVAL_MS,
+    requestSpacingMs: REQUESTED_KEYFRAME_MIN_SPACING_MS,
+  });
+  /** Since when every frame offered found the encoder's queue full; null while it takes them. */
+  let queueFullSince: number | null = null;
+
   function createEncoder(): VideoEncoder {
-    return new VideoEncoder({
-      output: (chunk) => onChunk(chunk),
+    const created: VideoEncoder = new VideoEncoder({
+      output: (chunk) => {
+        // A replaced encoder has nothing more to say: its chunks would land among the new one's.
+        if (created !== encoder) return;
+        queueFullSince = null;
+        keyframes.onOutput(chunk.type === "key", chunk.timestamp, performance.now());
+        onChunk(chunk);
+      },
       error: (error) => {
         console.error("VideoEncoder error:", error);
         noteFailure();
       },
     });
+    return created;
   }
   let encoder = createEncoder();
 
   /** Size of the frames the encoder was set up for (the source, not the encoded size). */
   let sourceWidth = 0;
   let sourceHeight = 0;
+  /** The capture's last size, kept when an encoder is replaced (which clears the above). */
+  let lastSourceWidth = 0;
+  let lastSourceHeight = 0;
   let configuredBitrate = 0;
+  /** The size the encoder encodes at (encodeSize.ts); the still-picture copy is taken at it. */
+  let encodeWidth = 0;
+  let encodeHeight = 0;
 
   /**
    * The encoder is set up for the frames being fed to it: sizes come from the frames
@@ -139,7 +178,11 @@ export async function startVideoEncodePipeline(
     encoder.configure(encoderConfig);
     sourceWidth = width;
     sourceHeight = height;
+    lastSourceWidth = width;
+    lastSourceHeight = height;
     configuredBitrate = bitrate;
+    encodeWidth = encoderConfig.width;
+    encodeHeight = encoderConfig.height;
   }
 
   if ("contentHint" in track) {
@@ -151,26 +194,29 @@ export async function startVideoEncodePipeline(
 
   let stopped = false;
   let paused = false;
-  let lastKeyframeAt = -Infinity;
-  /** A keyframe on the very next frame: the start, a new size, a resume, a rebuilt encoder. */
-  let mustKeyframe = true;
-  /** Someone outside asked for one; honoured within REQUESTED_KEYFRAME_MIN_SPACING_MS. */
-  let keyframeRequested = false;
 
-  function keyframeDue(now: number): boolean {
-    return (
-      mustKeyframe ||
-      (keyframeRequested && now - lastKeyframeAt >= REQUESTED_KEYFRAME_MIN_SPACING_MS) ||
-      now - lastKeyframeAt > KEYFRAME_INTERVAL_MS
-    );
+  /**
+   * A new encoder, set up on the next frame: after a failure, a hang, or keyframes that
+   * keep not coming out. Its first frame is a keyframe, which every viewer can start on.
+   */
+  function replaceEncoder(): void {
+    if (encoder.state !== "closed") encoder.close();
+    encoder = createEncoder();
+    keyframes.onNewEncoder();
+    sourceWidth = 0;
+    sourceHeight = 0;
+    queueFullSince = null;
   }
 
   async function encodeFrame(frame: VideoFrame): Promise<void> {
+    // stop() may land while a frame waits on a reconfigure; nothing new may start after it.
+    if (stopped) return;
     if (encoder.state === "closed") {
       if (performance.now() < retryAt) return;
-      encoder = createEncoder();
-      sourceWidth = 0;
-      sourceHeight = 0;
+      replaceEncoder();
+    } else if (keyframes.needsNewEncoder) {
+      console.warn("The video encoder keeps not producing the keyframes asked of it; starting a new one.");
+      replaceEncoder();
     }
 
     // First frame, the source changed size (e.g. the shared window was resized), or the
@@ -180,35 +226,99 @@ export async function startVideoEncodePipeline(
     if (sizeChanged || bitrate !== configuredBitrate) {
       await configureFor(frame.displayWidth, frame.displayHeight, bitrate);
       // Viewers need a fresh keyframe to pick up the new parameter sets.
-      if (sizeChanged) mustKeyframe = true;
+      if (sizeChanged) keyframes.require();
     }
-
-    if (encoder.encodeQueueSize > ENCODER_QUEUE_DROP_THRESHOLD) return;
 
     const now = performance.now();
-    const keyFrame = keyframeDue(now);
-    if (keyFrame) {
-      lastKeyframeAt = now;
-      mustKeyframe = false;
-      keyframeRequested = false;
+    if (encoder.encodeQueueSize > ENCODER_QUEUE_DROP_THRESHOLD) {
+      queueFullSince ??= now;
+      if (now - queueFullSince > ENCODER_HUNG_MS) {
+        console.warn("The video encoder stopped taking frames; starting a new one.");
+        noteFailure();
+        encoder.close();
+      }
+      return;
     }
+    queueFullSince = null;
 
-    encoder.encode(frame, { keyFrame });
+    encoder.encode(frame, { keyFrame: keyframes.decide(now, frame.timestamp) });
   }
+
+  const still = createStillPicture();
+  /** When the newest captured frame arrived, and its capture timestamp (microseconds). */
+  let lastFrameAt = -Infinity;
+  let lastFrameTimestamp = 0;
+  /** A captured frame is being encoded (it may await a reconfigure): no repeat meanwhile. */
+  let encoding = false;
+  /** A new encoder being set up for a still screen; the pump waits for it. */
+  let settingUp: Promise<void> | null = null;
+
+  /**
+   * A still screen whose encoder failed, or whose keyframes keep failing, gets a new encoder
+   * right away, set up for the size last captured -- waiting for the next captured frame to
+   * do it could take forever.
+   */
+  function replaceEncoderForStillScreen(): void {
+    replaceEncoder();
+    settingUp = configureFor(lastSourceWidth, lastSourceHeight, Math.round(targetBitrate * bitrateScale))
+      .catch((error) => {
+        console.error("Could not set up a new video encoder:", error);
+        noteFailure();
+        if (encoder.state !== "closed") encoder.close();
+      })
+      .finally(() => {
+        settingUp = null;
+      });
+  }
+
+  /** A keyframe is due but the capture went quiet: encode the still-picture copy as one. */
+  function repeatIfStalled(): void {
+    if (stopped || paused || encoding || settingUp) return;
+    const now = performance.now();
+    if (now - lastFrameAt < STALLED_CAPTURE_MS || lastSourceWidth === 0) return;
+    // Only once a keyframe is wanted: nobody needs a working encoder before that.
+    const failedEncoder = encoder.state === "closed" && now >= retryAt && keyframes.wants(now);
+    if (keyframes.needsNewEncoder || failedEncoder) {
+      replaceEncoderForStillScreen();
+      return;
+    }
+    if (encoder.state !== "configured" || !keyframes.wants(now)) return;
+    // Stamped as if captured now, on the capture's own clock, so the viewer's A/V sync
+    // treats it as current rather than as a stale frame from before the stall.
+    const timestamp = lastFrameTimestamp + Math.round((now - lastFrameAt) * 1000);
+    const repeat = still.frameAt(encodeWidth, encodeHeight, timestamp);
+    if (!repeat) return;
+    try {
+      if (keyframes.decide(now, timestamp)) encoder.encode(repeat, { keyFrame: true });
+    } catch (error) {
+      console.error("Still-screen keyframe failed:", error);
+    } finally {
+      repeat.close();
+    }
+  }
+  const stallTimer = setInterval(repeatIfStalled, STALL_CHECK_EVERY_MS);
 
   const pump = (async () => {
     while (!stopped) {
       const { done, value: frame } = await reader.read();
       if (done || !frame) break;
 
+      lastFrameAt = performance.now();
+      lastFrameTimestamp = frame.timestamp;
+      encoding = true;
       try {
+        if (settingUp) await settingUp;
         // Still read while paused, so the capture doesn't back up; just never encoded.
         if (!paused) await encodeFrame(frame);
+        // Copied (not kept) after the encode, so a resize has set the new encode size.
+        // Also while paused: resuming on a still screen needs a picture too.
+        if (encodeWidth > 0) still.remember(frame, encodeWidth, encodeHeight, lastFrameAt);
       } catch (error) {
         console.error("Video encode failed; rebuilding the encoder:", error);
         noteFailure();
         if (encoder.state !== "closed") encoder.close();
       } finally {
+        encoding = false;
         frame.close();
       }
     }
@@ -217,11 +327,11 @@ export async function startVideoEncodePipeline(
 
   return {
     requestKeyframe: () => {
-      keyframeRequested = true;
+      keyframes.request();
     },
     setPaused: (next) => {
       // Whoever arrives needs a keyframe; nothing before the pause is any use to them.
-      if (paused && !next) mustKeyframe = true;
+      if (paused && !next) keyframes.require();
       paused = next;
     },
     setBitrateScale: (scale) => {
@@ -229,6 +339,8 @@ export async function startVideoEncodePipeline(
     },
     stop: () => {
       stopped = true;
+      clearInterval(stallTimer);
+      still.clear();
       reader.cancel().catch(() => undefined);
       if (encoder.state !== "closed") encoder.close();
     },

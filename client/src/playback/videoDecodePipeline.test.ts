@@ -354,6 +354,52 @@ describe("startVideoDecodePipeline", () => {
     expect(onFirstFrame).toHaveBeenCalledTimes(1);
   });
 
+  describe("waiting for a keyframe with nothing arriving", () => {
+    // The relay sends a viewer waiting for its first keyframe nothing else: no delta to say
+    // one went by. A keyframe lost on the way (dropped in the presenter's encoder, or here
+    // before the pipeline existed) left the viewer on "Carregando a live" for good.
+    let perfNow = 0;
+    beforeEach(() => {
+      perfNow = 0;
+      vi.useFakeTimers();
+      vi.spyOn(performance, "now").mockImplementation(() => perfNow);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+    /** Lets time pass in small steps, so each timer sees the clock it would have. */
+    async function wait(ms: number) {
+      for (let elapsed = 0; elapsed < ms; elapsed += 100) {
+        perfNow += 100;
+        await vi.advanceTimersByTimeAsync(100);
+      }
+    }
+
+    it("asks for it again every few seconds", async () => {
+      const onKeyframeNeeded = vi.fn();
+      await startVideoDecodePipeline(fakeCanvas(), { onKeyframeNeeded });
+
+      await wait(1000);
+      expect(onKeyframeNeeded).not.toHaveBeenCalled(); // whoever made it just asked
+      await wait(9000);
+      expect(onKeyframeNeeded.mock.calls.length).toBeGreaterThanOrEqual(4);
+    });
+
+    it("stops asking once the keyframe is in, and once stopped", async () => {
+      const onKeyframeNeeded = vi.fn();
+      const pipeline = await startVideoDecodePipeline(fakeCanvas(), { onKeyframeNeeded });
+      pipeline.decodeChunk(key);
+      await wait(10_000);
+      expect(onKeyframeNeeded).not.toHaveBeenCalled();
+
+      const other = await startVideoDecodePipeline(fakeCanvas(), { onKeyframeNeeded });
+      other.stop();
+      await wait(10_000);
+      expect(onKeyframeNeeded).not.toHaveBeenCalled();
+    });
+  });
+
   it("awaitKeyframe holds deltas back until the next keyframe (a frame went missing)", async () => {
     const pipeline = await startVideoDecodePipeline(fakeCanvas());
     pipeline.decodeChunk(key);
