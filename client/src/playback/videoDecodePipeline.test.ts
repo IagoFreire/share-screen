@@ -322,14 +322,31 @@ describe("startVideoDecodePipeline", () => {
 
     it("resyncToLive also throws away what is still inside the decoder", async () => {
       const pipeline = await startVideoDecodePipeline(fakeCanvas());
-      pipeline.decodeChunk(key);
+      pipeline.decodeChunk(key); // stuck inside while the window was away
 
-      pipeline.resyncToLive();
+      perfNow = 1500;
+      expect(pipeline.resyncToLive()).toBe(true);
       pipeline.decodeChunk(delta);
       pipeline.decodeChunk(key);
 
       expect(FakeDecoder.created).toBe(2);
       expect(FakeDecoder.last!.decoded.map((chunk) => chunk.type)).toEqual(["key"]);
+    });
+
+    it("resyncToLive keeps a picture that kept up while the window was away", async () => {
+      // Janja keeps playing in the background (its thumbnail stays live). Coming back used
+      // to throw that decoder away anyway and wait for a keyframe -- and with a presenter
+      // whose keyframes go missing, the live stopped the moment the window was focused.
+      const pipeline = await startVideoDecodePipeline(fakeCanvas());
+      pipeline.decodeChunk(key);
+      FakeDecoder.last!.init.output(fakeFrame(0));
+
+      perfNow = 60_000;
+      expect(pipeline.resyncToLive()).toBe(false);
+      pipeline.decodeChunk({ ...delta, timestampUs: 16_667 });
+
+      expect(FakeDecoder.created).toBe(1);
+      expect(FakeDecoder.last!.decoded.map((chunk) => chunk.type)).toEqual(["key", "delta"]);
     });
   });
 

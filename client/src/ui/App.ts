@@ -861,8 +861,8 @@ export function mountApp(options: MountAppOptions): void {
   // back in fast-forward once visible again. Snap straight to live instead: drop what
   // built up and ask the presenter for a fresh keyframe to resume cleanly on.
   function resyncToLive(): void {
-    videoDecodePipeline?.resyncToLive();
-    if (hasPresenter()) wsClient.sendControl({ kind: "request-keyframe" });
+    // Only a backlog that was dropped needs a keyframe; a picture that kept up plays on.
+    if (videoDecodePipeline?.resyncToLive() && hasPresenter()) wsClient.sendControl({ kind: "request-keyframe" });
   }
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") resyncToLive();

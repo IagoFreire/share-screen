@@ -862,8 +862,8 @@ export function mountWatchView(options: WatchViewOptions): WatchView {
 
   // --- Resync after being backgrounded (see App.ts for the full rationale) ---
   function resyncToLive(): void {
-    videoDecodePipeline?.resyncToLive();
-    if (isWatching()) wsClient.sendControl({ kind: "request-keyframe" });
+    // Only a backlog that was dropped needs a keyframe; a picture that kept up plays on.
+    if (videoDecodePipeline?.resyncToLive() && isWatching()) wsClient.sendControl({ kind: "request-keyframe" });
   }
   function onVisibilityChange(): void {
     if (document.visibilityState === "visible") resyncToLive();

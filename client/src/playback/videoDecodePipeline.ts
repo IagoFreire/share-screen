@@ -52,15 +52,15 @@ export interface VideoDecodePipeline {
   awaitKeyframe: () => void;
   stats: () => VideoPlaybackStats;
   /**
-   * Drops every buffered frame and resets the clock so the next decoded frame is
-   * presented immediately instead of the queue playing out. Call this when the tab was
-   * backgrounded/unfocused for a while: browsers keep delivering and decoding frames in
-   * a hidden tab while throttling rendering, so without this the viewer sees the whole
-   * gap play back in fast-forward once the tab is visible again -- App.ts wires this to
-   * visibility/focus regain, paired with a request-keyframe so the decoder has a clean
-   * frame to resume on.
+   * Coming back to the window: if a backlog piled up while it was away (RESYNC_BACKLOG_MS),
+   * drops every buffered frame and the decoder with it, so the picture resumes at live on
+   * the next keyframe instead of playing the gap in fast-forward. Returns true then -- the
+   * caller asks for that keyframe. A picture that kept up (Janja plays on in the
+   * background) is left alone and false returned: throwing a working decoder away made the
+   * picture depend on a fresh keyframe, and with a presenter whose keyframes went missing
+   * the live stopped every time the window was focused.
    */
-  resyncToLive: () => void;
+  resyncToLive: () => boolean;
   stop: () => void;
 }
 
@@ -144,6 +144,12 @@ const MISSED_KEYFRAME_ASK_EVERY_MS = 1000;
  */
 const KEYFRAME_REASK_EVERY_MS = 2000;
 const KEYFRAME_REASK_CHECK_MS = 500;
+/**
+ * How far behind live the picture must have fallen while the window was away before
+ * coming back drops the backlog (resyncToLive). Under it nothing piled up: the jitter
+ * buffer alone holds a few hundred milliseconds of chunks.
+ */
+const RESYNC_BACKLOG_MS = 1000;
 /**
  * Decoder failures in a row, with no picture coming out in between, before giving up on
  * the default decoder for the software one. Some GPUs' hardware decoders refuse certain
@@ -533,6 +539,13 @@ export async function startVideoDecodePipeline(
       decoderErrors,
     }),
     resyncToLive: () => {
+      // What piled up while away: chunks stuck inside the decoder, or encoded ones waiting.
+      const now = performance.now();
+      const oldestInDecoder = pending.values().next();
+      const decoderBacklogMs = oldestInDecoder.done ? 0 : now - oldestInDecoder.value;
+      const bufferedMs = chunks.length > 1 ? (chunks[chunks.length - 1]!.timestampUs - chunks[0]!.timestampUs) / 1000 : 0;
+      if (Math.max(decoderBacklogMs, bufferedMs) < RESYNC_BACKLOG_MS) return false;
+
       // Everything buffered is behind live, so the newest of it marks the cutoff: any
       // frame decoded from here on that predates it belongs to the backlog being
       // dropped, not to the stream we're resuming on.
@@ -555,6 +568,7 @@ export async function startVideoDecodePipeline(
       decoder = createDecoder();
       pending = new Map();
       laggingSince = null;
+      return true;
     },
     stop: () => {
       stopped = true;
