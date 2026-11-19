@@ -22,6 +22,7 @@ import { pausesSiblingConnections, resolveJoinIdentity, startsWatchingNothing } 
 import { createAutoLayer, type AutoLayer } from "./autoLayer.js";
 import { presenterAudience, videoLayersInUse } from "./audience.js";
 import { createKeyframeThrottle } from "./keyframeThrottle.js";
+import { createParameterSetKeeper, type ParameterSetKeeper } from "./parameterSets.js";
 import { isAppExeName, sanitizeAudioStatus } from "./audioStatus.js";
 import { countSpectators, listRoomPeople } from "./viewerList.js";
 import { canPresentIn, specialRoomAccess } from "./roomAccess.js";
@@ -33,6 +34,23 @@ const MAX_LAYERS = 4;
 /** At most one keyframe request per broadcast layer this often when frames get dropped. */
 const DROP_KEYFRAME_MIN_INTERVAL_MS = 1000;
 const dropKeyframeThrottle = createKeyframeThrottle(DROP_KEYFRAME_MIN_INTERVAL_MS);
+
+/** Each presenter connection's last parameter sets, per simulcast layer (see parameterSets.ts). */
+const parameterSets = new WeakMap<WebSocket, Map<number, ParameterSetKeeper>>();
+
+function parameterSetKeeper(presenter: WebSocket, layer: number): ParameterSetKeeper {
+  let byLayer = parameterSets.get(presenter);
+  if (!byLayer) {
+    byLayer = new Map();
+    parameterSets.set(presenter, byLayer);
+  }
+  let keeper = byLayer.get(layer);
+  if (!keeper) {
+    keeper = createParameterSetKeeper();
+    byLayer.set(layer, keeper);
+  }
+  return keeper;
+}
 import { resolveChannelName, resolveGuildName, resolveUserName } from "../auth/discordNames.js";
 
 interface ConnectionState {
@@ -361,9 +379,12 @@ export function handleMessage(ws: WebSocket, data: Uint8Array): void {
 
   // Audio is prioritised so a congested link thins the video rather than breaking speech.
   const priority = frame.type === FrameType.Audio ? "audio" : "video";
-  const outgoing = encodeFrame({ ...frame, slot }, frame.payload);
   const isVideo = frame.type === FrameType.Video;
   const frameLayer = frame.layer ?? 0;
+  // A keyframe goes out with its parameter sets, even when the presenter's encoder (AMD's)
+  // left them out: without them a viewer's decoder starting on it shows nothing at all.
+  const payload = isVideo && frame.keyFrame ? parameterSetKeeper(ws, frameLayer).complete(frame.payload) : frame.payload;
+  const outgoing = encodeFrame({ ...frame, slot }, payload);
   const now = Date.now();
   let layersMoved = false;
 
