@@ -1,9 +1,11 @@
 import {
+  createParameterSetKeeper,
   FrameType,
   SLOT_PRESENTER,
   TARGET_AUDIO_BITRATE_KBPS_DEFAULT,
   type ControlMessage,
   type FrameHeader,
+  type ParameterSetKeeper,
   type QualityPreset,
 } from "@screenshare-bot/shared";
 import type { CaptureStreams } from "../capture/screenCapture.js";
@@ -88,6 +90,14 @@ interface LayerState {
   /** Per-layer sequence number: a viewer only ever receives one layer. */
   clock: number;
   paused: boolean;
+  /**
+   * The encoder's SPS/PPS, put back into keyframes that come without (see parameterSets.ts).
+   * Learned here from every keyframe, sent or not: AMD's encoder writes them into its very
+   * first frame only, which leaves before the relay has registered the broadcast (or while
+   * nobody watches) -- so the relay never sees them, and every viewer joining later got
+   * keyframes its decoder silently couldn't start on.
+   */
+  parameterSets: ParameterSetKeeper;
 }
 
 export function createPresenterSession(deps: PresenterSessionDeps): PresenterSession {
@@ -185,9 +195,11 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
   }
 
   function sendVideo(layer: LayerState, index: number, simulcast: boolean, chunk: EncodedVideoChunk): void {
+    const isKey = chunk.type === "key";
+    // Before anything can drop it: the first keyframe is the one carrying the parameter sets.
+    const keyPayload = isKey ? layer.parameterSets.complete(copyChunk(chunk)) : null;
     if (layer.paused) return; // still in the encoder when the pause came
 
-    const isKey = chunk.type === "key";
     const decision = layer.gate.admit(isKey, deps.sendBufferedBytes?.() ?? 0);
     const now = performance.now();
     if (decision === "congested") {
@@ -208,7 +220,7 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
         keyFrame: isKey,
         ...(simulcast ? { layer: index } : {}),
       },
-      copyChunk(chunk),
+      keyPayload ?? copyChunk(chunk),
     );
   }
 
@@ -241,7 +253,13 @@ export function createPresenterSession(deps: PresenterSessionDeps): PresenterSes
           await track.applyConstraints({ height: { ideal: preset.height }, frameRate: { ideal: preset.framerate } });
           layerTracks.push(track);
         }
-        const layer: LayerState = { pipeline: null, gate: createUplinkGate(highWaterBytes), clock: 0, paused: false };
+        const layer: LayerState = {
+          pipeline: null,
+          gate: createUplinkGate(highWaterBytes),
+          clock: 0,
+          paused: false,
+          parameterSets: createParameterSetKeeper(),
+        };
         layers.push(layer);
         layer.pipeline = await deps.startVideo(track, (chunk) => sendVideo(layer, index, simulcast, chunk), {
           quality: preset,

@@ -137,6 +137,38 @@ describe("presenter session", () => {
     expect(Array.from(frames[0].payload)).toEqual([9, 8]);
   });
 
+  it("sends every keyframe with the parameter sets of the encoder's first, which may never have gone out", async () => {
+    // AMD's encoder puts SPS/PPS in its very first frame only, and that one leaves before
+    // the relay has registered the broadcast -- the relay drops it and never learns them.
+    const { session, frames, emitVideo } = setup();
+    await session.start(QUALITY);
+    const sps = [0, 0, 0, 1, 0x67, 0x64];
+    const pps = [0, 0, 0, 1, 0x68, 0xee];
+    const idr = [0, 0, 0, 1, 0x65, 0x88];
+    emitVideo(fakeChunk([...sps, ...pps, ...idr], 1000, "key"));
+
+    session.handleControl({ kind: "presenting-started", slot: 0 });
+    emitVideo(fakeChunk(idr, 2_000_000, "key")); // a viewer joined: a forced keyframe, bare
+
+    expect(Array.from(frames[frames.length - 1]!.payload)).toEqual([...sps, ...pps, ...idr]);
+  });
+
+  it("learns them from a first keyframe it held back while nobody watched", async () => {
+    const { session, frames, emitVideo } = setup();
+    await session.start(QUALITY);
+    session.handleControl({ kind: "audience-changed", watchers: 0, videoWatchers: 0, shownWatchers: 0, shownVideoWatchers: 0 });
+    const sps = [0, 0, 0, 1, 0x67, 0x64];
+    const pps = [0, 0, 0, 1, 0x68, 0xee];
+    const idr = [0, 0, 0, 1, 0x65, 0x88];
+    emitVideo(fakeChunk([...sps, ...pps, ...idr], 1000, "key")); // still in the encoder when the pause came
+
+    session.handleControl({ kind: "audience-changed", watchers: 1, videoWatchers: 1, shownWatchers: 1, shownVideoWatchers: 1 });
+    emitVideo(fakeChunk(idr, 2_000_000, "key"));
+
+    expect(frames).toHaveLength(1);
+    expect(Array.from(frames[0]!.payload)).toEqual([...sps, ...pps, ...idr]);
+  });
+
   it("request-keyframe reaches the video pipeline", async () => {
     const { session, keyframeRequests } = setup();
     await session.start(QUALITY);

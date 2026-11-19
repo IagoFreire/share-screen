@@ -1,5 +1,6 @@
 import type { WebSocket } from "ws";
 import {
+  createParameterSetKeeper,
   decodeFrame,
   decodeControlMessage,
   encodeControlMessage,
@@ -10,6 +11,7 @@ import {
   SLOT_PRESENTER,
   type ControlMessage,
   type LayerInfo,
+  type ParameterSetKeeper,
   voiceRoomIdOfLive,
 } from "@screenshare-bot/shared";
 import { roomManager } from "../roomManager.js";
@@ -22,7 +24,6 @@ import { pausesSiblingConnections, resolveJoinIdentity, startsWatchingNothing } 
 import { createAutoLayer, type AutoLayer } from "./autoLayer.js";
 import { presenterAudience, videoLayersInUse } from "./audience.js";
 import { createKeyframeThrottle } from "./keyframeThrottle.js";
-import { createParameterSetKeeper, type ParameterSetKeeper } from "./parameterSets.js";
 import { isAppExeName, sanitizeAudioStatus } from "./audioStatus.js";
 import { countSpectators, listRoomPeople } from "./viewerList.js";
 import { canPresentIn, specialRoomAccess } from "./roomAccess.js";

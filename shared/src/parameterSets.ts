@@ -9,10 +9,12 @@
  * an error until parameter sets show up: "N recebidos", "sem imagem ainda", erros 0, and
  * the decoder restarted for overload every couple of seconds, forever.
  *
- * So the relay remembers the last parameter sets each broadcast (and simulcast layer)
- * sent, and puts them back in front of a keyframe that came without -- for every presenter
- * at once, whatever client version they run. Only keyframes are looked at, and only up to
- * their first slice: the parameter sets always come before it.
+ * So the last parameter sets are remembered and put back in front of a keyframe that came
+ * without, in two places. The presenter's session does it at the source, for each
+ * simulcast layer: it sees the encoder's first frame even when nobody receives it -- that
+ * frame leaves before the relay has registered the broadcast. The relay does it too, per
+ * presenter and layer, for clients that don't yet. Only keyframes are looked at, and only up
+ * to their first slice: the parameter sets always come before it.
  */
 
 const NAL_TYPE_MASK = 0x1f;
